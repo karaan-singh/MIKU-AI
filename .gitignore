@@ -1,0 +1,10 @@
+# Temporary Chrome test profiles
+scratch/chrome-*
+
+# System files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Dependencies
+node_modules/

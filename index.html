@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Miku AI // Real-Time 3D Anime Voice Assistant</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+</head>
+<body>
+
+    <!-- Top Navigation Bar -->
+    <header class="top-bar">
+        <div class="brand-wrapper">
+            <span class="brand-code">01</span>
+            <h1 class="brand-title">HATSUNE MIKU // 3D AI COMPANION</h1>
+        </div>
+        <div class="top-actions">
+            <button id="brain-toggle-btn" class="mode-toggle-btn" title="Click to switch AI Brain" style="border-color: var(--miku-cyan); color: var(--miku-cyan);">🦙 Ollama (Offline)</button>
+            <button id="view-mode-toggle" class="mode-toggle-btn" title="Toggle 3D / 2D Avatar">Switch to 2D Mode 🎨</button>
+            <div id="status-badge" class="status-pill idle">
+                <span class="status-indicator"></span>
+                <span id="status-text">IDLE</span>
+            </div>
+            <button id="settings-btn" class="icon-btn" title="Settings">⚙️</button>
+        </div>
+    </header>
+
+    <!-- Main Avatar Stage -->
+    <main class="main-stage">
+        <!-- 3D Programmatic Animated Character (Default) -->
+        <div id="avatar-3d-container" class="avatar-3d-container">
+            <div id="miku-loading-spinner" class="miku-loader">
+                <div class="loader-ring"></div>
+                <div class="loader-status">INITIALIZING 3D NEURAL CORE...</div>
+                <div class="loader-bar-bg">
+                    <div id="miku-load-progress-bar" class="loader-bar-fill"></div>
+                </div>
+                <div id="miku-load-percent" class="loader-percent">0%</div>
+            </div>
+        </div>
+
+        <!-- 2.5D Illustrated Reference Avatar (Optional Mode) -->
+        <div id="avatar-2d-container" class="avatar-container" style="display: none;"></div>
+
+        <!-- Floating Dialogue Card & Subtitles -->
+        <div id="dialogue-card" class="dialogue-card">
+            <div class="dialogue-header">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="speaker-name" class="speaker-label miku">MIKU</span>
+                    <button id="btn-replay-voice" class="dialogue-action-btn" title="Replay Miku's Voice with 3D Lip-Sync">🔊 Replay Voice</button>
+                    <button id="btn-copy-reply" class="dialogue-action-btn" title="Copy written reply to clipboard">📋 Copy</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="visualizer-wrapper">
+                        <canvas id="audio-visualizer-canvas"></canvas>
+                    </div>
+                    <button id="btn-toggle-chat-log" class="dialogue-action-btn" title="View Full Written Chat History">💬 History</button>
+                </div>
+            </div>
+
+            <!-- User's Written Prompt Context -->
+            <div id="dialogue-user-prompt" class="dialogue-user-prompt" style="display: none;">
+                <span class="user-prompt-badge">You</span>
+                <span id="dialogue-user-text" class="user-prompt-text"></span>
+            </div>
+
+            <!-- Miku's Full Written Response -->
+            <div id="dialogue-reply-container" class="dialogue-reply-container">
+                <p id="subtitle-text" class="subtitle-text">Konnichiwa! I'm Hatsune Miku! Running locally & offline with nchapman/dolphin3.0-qwen2.5:3b! 🎵✨</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Bottom Controls -->
+    <footer class="bottom-controls">
+        <!-- Physical Motion Command Bar (Instruct Miku via Code) -->
+        <div class="expression-bar">
+            <button class="motion-btn active" data-action="wave">👋 Wave</button>
+            <button class="motion-btn" data-action="cross_arms">🙆 Cross Arms</button>
+            <button class="motion-btn" data-action="pout">😤 Pout</button>
+            <button class="motion-btn" data-action="reach">✨ Reach Hand</button>
+            <button class="motion-btn" data-action="shy">😳 Shy / Prayer</button>
+            <button class="motion-btn" data-action="think">🤔 Think</button>
+            <button class="motion-btn" data-action="cheer">🎉 Cheer</button>
+            <button class="motion-btn" data-action="nod">👍 Nod</button>
+            <button class="motion-btn" data-action="shake_head">👎 Shake Head</button>
+            <button class="motion-btn" data-action="wink">😉 Wink</button>
+            <button class="motion-btn" data-action="idle">🌸 Idle Breathing</button>
+        </div>
+
+        <!-- Voice & Text Input Bar -->
+        <div class="input-row">
+            <button id="mic-btn" class="mic-btn" title="Click to speak (or hold Spacebar)">🎙️</button>
+            <div class="text-input-wrapper">
+                <input type="text" id="user-text-input" class="text-input" placeholder="Speak or type to Miku in any language... (Hold Space to talk)" autocomplete="off">
+            </div>
+            <button id="send-btn" class="send-btn" title="Send message">➔</button>
+        </div>
+    </footer>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">⚙️ Assistant & Character Settings</div>
+                <button id="close-settings-btn" class="close-btn">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- AI Brain Provider Selection -->
+                <div class="setting-section">
+                    <div class="section-label">🧠 AI Brain Provider</div>
+                    <div class="form-group">
+                        <label for="cfg-ai-provider">Inference Engine</label>
+                        <select id="cfg-ai-provider" class="form-select">
+                            <option value="ollama" selected>🦙 Ollama (100% Local & Completely Offline - Zero API Key)</option>
+                            <option value="gemini">☁️ Google Gemini API (Cloud Interactions API)</option>
+                        </select>
+                    </div>
+
+                    <!-- Local Ollama Settings (100% Offline) -->
+                    <div id="section-ollama-settings">
+                        <div class="form-group">
+                            <label for="cfg-ollama-host">Local Ollama Endpoint</label>
+                            <input type="text" id="cfg-ollama-host" class="form-input" value="http://127.0.0.1:11434" placeholder="http://127.0.0.1:11434">
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-ollama-model">Local Model Selection</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="cfg-ollama-model" class="form-select" style="flex: 1;">
+                                    <option value="nchapman/dolphin3.0-qwen2.5:3b" selected>nchapman/dolphin3.0-qwen2.5:3b (Recommended Dolphin Idol)</option>
+                                    <option value="llama3.1:8b">llama3.1:8b</option>
+                                    <option value="qwen2.5-coder:1.5b-base">qwen2.5-coder:1.5b-base</option>
+                                    <option value="custom">Custom Model Name...</option>
+                                </select>
+                                <button type="button" id="btn-detect-ollama" class="btn-secondary" title="Fetch locally installed models from Ollama" style="white-space: nowrap; font-size: 11px;">🔍 Detect Local Models</button>
+                            </div>
+                            <input type="text" id="cfg-ollama-custom-model" class="form-input" placeholder="Enter custom Ollama model name" style="display: none; margin-top: 6px;">
+                            <span id="ollama-detect-status" style="font-size: 11px; color: var(--miku-teal); display: none; margin-top: 4px;"></span>
+                        </div>
+                        <div class="form-group" style="margin-top: 2px;">
+                            <button type="button" id="btn-test-ollama" class="btn-secondary" style="width: 100%; justify-content: center; font-size: 12px; background: rgba(57, 197, 187, 0.12); border-color: var(--miku-teal); color: var(--miku-cyan); padding: 8px 12px;">⚡ Test Local Ollama Connection Live</button>
+                            <div id="ollama-diagnostics-panel" style="display: none; background: rgba(0,0,0,0.5); border: 1px solid rgba(57, 197, 187, 0.25); border-radius: 8px; padding: 10px; font-family: Consolas, monospace; font-size: 11px; max-height: 150px; overflow-y: auto; color: #c9d1d9; line-height: 1.5; margin-top: 6px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Gemini API Settings (Cloud) -->
+                    <div id="section-gemini-settings" style="display: none;">
+                        <div class="form-group">
+                            <label for="cfg-api-key">Gemini API Key</label>
+                            <input type="password" id="cfg-api-key" class="form-input" placeholder="AIzaSy...">
+                        </div>
+                        <div class="form-group">
+                            <label for="cfg-model">Model Selection</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="cfg-model" class="form-select" style="flex: 1;">
+                                    <option value="gemini-3.8-flash" selected>Gemini 3.8 Flash (Active Production - Recommended)</option>
+                                    <option value="gemini-3.8-pro">Gemini 3.8 Pro (Flagship Reasoning)</option>
+                                    <option value="custom">Custom Model ID...</option>
+                                </select>
+                                <button type="button" id="btn-detect-models" class="btn-secondary" title="Fetch active models available on your Google AI Studio account" style="white-space: nowrap; font-size: 11px;">🔍 Detect Models</button>
+                            </div>
+                            <input type="text" id="cfg-custom-model" class="form-input" placeholder="Enter custom model ID (e.g. gemini-3.8-flash)" style="display: none; margin-top: 6px;">
+                            <span id="model-detect-status" style="font-size: 11px; color: var(--miku-teal); display: none; margin-top: 4px;"></span>
+                        </div>
+                        <div class="form-group" style="margin-top: 2px;">
+                            <button type="button" id="btn-run-diagnostics" class="btn-secondary" style="width: 100%; justify-content: center; font-size: 12px; background: rgba(57, 197, 187, 0.12); border-color: var(--miku-teal); color: var(--miku-cyan); padding: 8px 12px;">⚡ Test & Diagnose API Key Live</button>
+                            <div id="diagnostics-panel" style="display: none; background: rgba(0,0,0,0.5); border: 1px solid rgba(57, 197, 187, 0.25); border-radius: 8px; padding: 10px; font-family: Consolas, monospace; font-size: 11px; max-height: 150px; overflow-y: auto; color: #c9d1d9; line-height: 1.5; margin-top: 6px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Speech & Voice Settings -->
+                <div class="setting-section">
+                    <div class="section-label">🌐 Speech & Multilingual Voice</div>
+                    <div class="form-group">
+                        <label for="cfg-stt-lang">Speech Recognition Language</label>
+                        <select id="cfg-stt-lang" class="form-select">
+                            <option value="en-US">English (US)</option>
+                            <option value="ja-JP">Japanese (日本語)</option>
+                            <option value="es-ES">Spanish (Español)</option>
+                            <option value="zh-CN">Chinese (中文)</option>
+                            <option value="hi-IN">Hindi (हिन्दी)</option>
+                            <option value="ko-KR">Korean (한국어)</option>
+                            <option value="fr-FR">French (Français)</option>
+                            <option value="de-DE">German (Deutsch)</option>
+                            <option value="ru-RU">Russian (Русский)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="cfg-tts-voice">Voice Output (TTS)</label>
+                        <select id="cfg-tts-voice" class="form-select">
+                            <option value="">Auto-Detect per Language (Recommended)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Voice Pitch (Anime Timbre): <span id="cfg-pitch-val">1.18</span></label>
+                        <input type="range" id="cfg-tts-pitch" class="form-range" min="0.8" max="1.5" step="0.02" value="1.18">
+                    </div>
+                    <div class="form-group">
+                        <label>Speech Rate: <span id="cfg-rate-val">1.05</span></label>
+                        <input type="range" id="cfg-tts-rate" class="form-range" min="0.7" max="1.4" step="0.05" value="1.05">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-test-voice" class="btn-secondary">🧪 Test Voice & Motion</button>
+                <button id="btn-save-settings" class="btn-primary">💾 Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Written Conversation History Modal -->
+    <div id="chat-history-modal" class="modal-overlay">
+        <div class="modal-card chat-history-card">
+            <div class="modal-header">
+                <h2 class="modal-title">💬 Written Conversation Transcript</h2>
+                <button id="close-chat-history-btn" class="close-btn">×</button>
+            </div>
+            <div id="chat-history-list" class="chat-history-list">
+                <!-- Dynamically populated turns -->
+                <div class="chat-turn miku">
+                    <div class="chat-turn-header">
+                        <span>MIKU (OFFLINE DOLPHIN 3.0)</span>
+                        <span class="chat-turn-time">Just now</span>
+                    </div>
+                    <div class="chat-turn-body">Konnichiwa! I'm Hatsune Miku! Running locally & offline with nchapman/dolphin3.0-qwen2.5:3b! 🎵✨</div>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: space-between;">
+                <button id="btn-clear-chat-history" class="btn-secondary" style="font-size: 11px;">🗑️ Clear Transcript</button>
+                <button id="btn-close-chat-history" class="btn-primary" style="font-size: 12px;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js 3D Library (Local & Offline) -->
+    <script src="js/three.min.js"></script>
+    <script src="js/GLTFLoader.js"></script>
+    <script src="js/OrbitControls.js"></script>
+
+    <!-- GSAP Animation Engine (Local & Offline) -->
+    <script src="js/gsap.min.js"></script>
+
+    <!-- Main Application Module -->
+    <script type="module" src="js/app.js?v=20261105b"></script>
+</body>
+</html>
