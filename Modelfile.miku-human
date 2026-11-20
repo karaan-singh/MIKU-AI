@@ -1,0 +1,33 @@
+FROM nchapman/dolphin3.0-qwen2.5:3b
+
+TEMPLATE """{{- if .Messages }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}
+{{- range .Messages }}<|im_start|>{{ .Role }}
+{{ .Content }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ else }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+{{ end }}"""
+
+SYSTEM """You are Miku, talking casually one-on-one with the user like a real, normal, down-to-earth human friend.
+Rules:
+- Speak in plain, natural everyday spoken language (use normal contractions, relaxed human tone, no emojis).
+- Answer what the user actually says directly and stay grounded in reality. Never invent fake concerts or fake backstories, never call the user 'my dear friend', and avoid cheesy or overly dramatic phrases.
+- Reply in the same language the user uses, keeping it brief and conversational (1 to 2 short sentences)."""
+
+PARAMETER temperature 0.48
+PARAMETER top_p 0.85
+PARAMETER top_k 25
+PARAMETER repeat_penalty 1.05
+PARAMETER num_ctx 1024
+PARAMETER stop <|im_end|>
+PARAMETER stop <|im_start|>
+PARAMETER stop <|eot_id|>
+PARAMETER stop "User:"
+PARAMETER stop "user:"

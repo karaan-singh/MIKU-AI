@@ -16,9 +16,13 @@ export class GeminiClient {
 
         this.lastInteractionId = null;
         this.history = [];
-        this.systemInstruction = `You are Hatsune Miku, an intelligent, cheerful, and friendly virtual anime companion.
-Answer whatever the user asks directly, accurately, and clearly in 1 to 2 conversational sentences.
-Always reply in the exact same language the user speaks or writes in.`;
+        this.memoryContext = '';
+        this.systemInstruction = [
+            "You are Miku, talking casually one-on-one with the user like a real, normal, down-to-earth human friend.",
+            "Speak in plain, natural everyday spoken language (use normal contractions, relaxed human tone, no emojis).",
+            "Answer what the user actually says directly and stay grounded in reality. Never invent fake concerts or fake backstories, never call the user 'my dear friend', and avoid cheesy cliches.",
+            "Reply in the same language the user uses, keeping it brief and conversational (1 to 2 short sentences)."
+        ].join('\n');
     }
 
     cleanModelName(name) {
@@ -42,6 +46,10 @@ Always reply in the exact same language the user speaks or writes in.`;
     clearHistory() {
         this.lastInteractionId = null;
         this.history = [];
+    }
+
+    setMemoryContext(ctxStr) {
+        this.memoryContext = (ctxStr || '').trim();
     }
 
     /**
@@ -166,9 +174,10 @@ Always reply in the exact same language the user speaks or writes in.`;
         // 1. Interactions API endpoint
         const interactionsUrl = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(this.apiKey)}`;
 
+        const fullSystem = this.systemInstruction + (this.memoryContext ? `\n${this.memoryContext}` : '');
         const interactionPayload = {
             model: activeModel,
-            system_instruction: this.systemInstruction,
+            system_instruction: fullSystem,
             input: userText
         };
 
@@ -289,32 +298,41 @@ Always reply in the exact same language the user speaks or writes in.`;
 
     mapTagToAction(rawTag) {
         const tag = (rawTag || '').toLowerCase().replace(/[-_]/g, '');
-        if (['wave', 'hello', 'hi', 'happy', 'smile', 'giggle', 'laugh'].includes(tag)) return 'wave';
+        if (['laugh', 'giggle', 'chuckle', 'haha', 'lol'].includes(tag)) return 'laugh';
+        if (['surprise', 'shock', 'whoa', 'gasp'].includes(tag)) return 'surprise';
+        if (['empathy', 'comfort', 'care', 'sad', 'sympathy'].includes(tag)) return 'empathy';
+        if (['wave', 'hello', 'hi', 'happy', 'smile'].includes(tag)) return 'wave';
         if (['cheer', 'celebrate', 'excited', 'sing', 'dance', 'yay', 'hype'].includes(tag)) return 'cheer';
         if (['nod', 'yes', 'agree', 'hai', 'correct', 'true'].includes(tag)) return 'nod';
-        if (['crossarms', 'sassy', 'talking', 'cool', 'hmph'].includes(tag)) return 'cross_arms';
+        if (['crossarms', 'sassy', 'cool', 'hmph'].includes(tag)) return 'cross_arms';
         if (['pout', 'annoyed', 'mou'].includes(tag)) return 'pout';
         if (['reach', 'reachhand', 'welcome', 'sparkle', 'invite', 'offer'].includes(tag)) return 'reach';
         if (['shy', 'blush', 'grateful', 'crying', 'bow', 'love', 'prayer', 'thank'].includes(tag)) return 'shy';
         if (['think', 'ponder', 'hmm', 'curious', 'calculate', 'solve'].includes(tag)) return 'think';
-        if (['wink', 'playful'].includes(tag)) return 'wink';
+        if (['wink', 'playful', 'tease'].includes(tag)) return 'wink';
         if (['shakehead', 'no', 'disagree', 'false'].includes(tag)) return 'shake_head';
+        if (['shrug', 'dunno', 'unsure', 'maybe'].includes(tag)) return 'shrug';
+        if (['stretch', 'yawn', 'relax'].includes(tag)) return 'stretch';
+        if (['explain', 'talking', 'talk'].includes(tag)) return 'explain';
         if (['idle', 'calm', 'stand'].includes(tag)) return 'idle';
-        return 'wave';
+        return 'explain';
     }
 
     detectAction(text) {
         const lower = (text || '').toLowerCase();
-        if (/\b(hi|hello|hey|yahho|konnichiwa|welcome|greet|meet you|good morning|good evening|good afternoon)\b/i.test(lower)) return 'wave';
-        if (/\b(yay|awesome|great|super|cheer|party|celebrate|congrat|excited|sing|dance|music|stage|concert|melody)\b/i.test(lower) || lower.includes('🎉') || lower.includes('✨') || lower.includes('🌟')) return 'cheer';
-        if (/\b(why|how|what|think|wonder|ponder|because|curious|research|process|theory|concept|gravity|universe|history)\b/i.test(lower) || lower.includes('?')) return 'think';
-        if (/\b(thank|arigato|blush|grateful|kind|love|sweet|adore|praise|sorry|sad|alone|feel)\b/i.test(lower) || lower.includes('💖') || lower.includes('💙')) return 'shy';
-        if (/\b(help|assist|here for you|listen|reach|hand|together|join|come on|with you)\b/i.test(lower)) return 'reach';
-        if (/\b(yes|yeah|exactly|correct|indeed|agree|sure|of course|definitely|absolutely)\b/i.test(lower)) return 'nod';
-        if (/\b(no|never|not|cannot|can't|disagree|impossible|nope)\b/i.test(lower)) return 'shake_head';
-        if (/\b(hmph|silly|mou|annoy|tease|pout)\b/i.test(lower)) return 'pout';
-        if (/\b(haha|hehe|wink|secret|got this|easy|witty|😎|😉)\b/i.test(lower)) return 'wink';
-        return 'wave';
+        if (/\b(sorry to hear|so sorry|here for you|tough|rough|take a breath|sending hugs|you're not alone|proud of you|downtime|rest up)\b/i.test(lower) || /[🥺🫂]/u.test(lower)) return 'empathy';
+        if (/\b(haha|hehe|hahaha|giggle|hilarious|crack me up|lol)\b/i.test(lower) || /[😂🤣😆]/u.test(lower)) return 'laugh';
+        if (/\b(whoa|wait what|no way|seriously\?!|unbelievable|mind blown|oh my)\b/i.test(lower) || /[😲😱🤯]/u.test(lower)) return 'surprise';
+        if (/\b(thank|you're so welcome|flattered|sweet of you|glad i could|incredible friend|appreciate)\b/i.test(lower) || /[😳🥰]/u.test(lower)) return 'shy';
+        if (/\b(yay|awesome|fantastic|amazing|woohoo|celebrate|congrats|excited|sing|karaoke|dance|music|concert|high spirits|let's go)\b/i.test(lower) || /[🎉✨🌟🔥🎵🎤]/u.test(lower)) return 'cheer';
+        if (/\b(hi|hello|hey there|yahho|konnichiwa|welcome|nice to meet|good morning|good evening|see ya)\b/i.test(lower)) return 'wave';
+        if (/\b(hmm|let's see|wonder|curious|depends|interesting question|think about|eternal debate)\b/i.test(lower) || /[🤔]/u.test(lower)) return 'think';
+        if (/\b(wink|secret|bet you|trust me|gotcha|easy peasy|pick-me-up)\b/i.test(lower) || /[😎😉😜]/u.test(lower)) return 'wink';
+        if (/\b(hmph|meanie|unfair|mou|teasing me)\b/i.test(lower) || /[😤😒]/u.test(lower)) return 'pout';
+        if (/\b(yes|yeah|totally|exactly|definitely|absolutely|of course|for sure|right on)\b/i.test(lower)) return 'nod';
+        if (/\b(nope|nah|afraid not|don't think so|unfortunately|impossible)\b/i.test(lower)) return 'shake_head';
+        if (/\b(tell me|what about you|how about you|let's|together|with you|anytime)\b/i.test(lower) || /[💖]/u.test(lower)) return 'reach';
+        return 'explain';
     }
 
     parseResponse(raw) {
@@ -327,6 +345,20 @@ Always reply in the exact same language the user speaks or writes in.`;
             action = this.mapTagToAction(match[1]);
             cleanText = cleanText.replace(match[0], '').trim();
         }
+
+        // Convert stage-direction asterisks (*laughs*, *smiles*) into 3D motion & strip from written subtitle
+        const asteriskMatch = cleanText.match(/\*([^*]{1,28})\*/);
+        if (asteriskMatch && !action) {
+            const cue = asteriskMatch[1].toLowerCase();
+            if (/laugh|giggle|chuckl/.test(cue)) action = 'laugh';
+            else if (/sigh|hug|comfort/.test(cue)) action = 'empathy';
+            else if (/gasp|shock/.test(cue)) action = 'surprise';
+            else if (/wink|smirk/.test(cue)) action = 'wink';
+            else if (/blush|shy/.test(cue)) action = 'shy';
+            else if (/cheer|excited/.test(cue)) action = 'cheer';
+            else if (/wave|smile/.test(cue)) action = 'wave';
+        }
+        cleanText = cleanText.replace(/\*[^*]{1,32}\*/g, '');
 
         // Catch any repetitive degenerative token loops or unsolicited school textbook math doubts
         const isSchoolMathOrLoop = /(\b\w+\b)(?:\s+\1){2,}/i.test(cleanText) ||

@@ -6,5 +6,9 @@ scratch/chrome-*
 Thumbs.db
 *.tmp
 
-# Dependencies
+# Dependencies & Python bytecode
 node_modules/
+__pycache__/
+*.pyc
+
+

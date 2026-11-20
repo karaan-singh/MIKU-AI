@@ -1,21 +1,36 @@
-import { GeminiClient } from './gemini.js?v=20261105b';
-import { OllamaClient } from './ollama.js?v=20261105b';
-import { TTSEngine } from './tts.js?v=20261105b';
-import { STTEngine } from './stt.js?v=20261105b';
-import { Miku3D } from './miku3d.js?v=20261105b';
-import { AvatarEngine } from './avatar.js?v=20261105b';
-import { AudioVisualizer } from './audio.js?v=20261105b';
+import { GeminiClient } from './gemini.js?v=20261120h';
+import { OllamaClient } from './ollama.js?v=20261120h';
+import { TTSEngine } from './tts.js?v=20261120h';
+import { STTEngine } from './stt.js?v=20261120h';
+import { Miku3D } from './miku3d.js?v=20261120h';
+import { AvatarEngine } from './avatar.js?v=20261120h';
+import { AudioVisualizer } from './audio.js?v=20261120h';
+import { MemoryEngine } from './memory.js?v=20261120h';
+import { PerceptionEngine } from './perception.js?v=20261120h';
+
+function escapeHtml(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
 
 class MikuApp {
     constructor() {
         this.status = 'idle';
-        this.viewMode = localStorage.getItem('miku_view_mode') || '3d'; // '3d' or '2d'
+        this.viewMode = localStorage.getItem('miku_view_mode') || '3d';
 
-        // AI Provider: default to 'ollama' for 100% offline local AI!
+        // Persistent Episodic Memory (100% Local)
+        this.memory = new MemoryEngine();
+
+        // AI Provider: default to 'ollama' for 100% offline local miku-human / Qwen AI
         this.aiProvider = localStorage.getItem('ai_provider') || 'ollama';
         this.ollama = new OllamaClient();
         this.ollama.clearHistory();
         this.gemini = new GeminiClient();
+        this.syncMemoryToBrains();
 
         this.gemini.onModelSwitched = (oldModel, newModel, reason) => {
             console.log(`Auto-switched Gemini model from ${oldModel} to ${newModel} due to ${reason}`);
@@ -33,10 +48,7 @@ class MikuApp {
             this.setStatus('thinking', `High traffic spike on Gemini 3.8 Flash, retrying in ${secs}s (${attempt}/4)...`);
         };
 
-        this.tts = new TTSEngine();
-        this.stt = new STTEngine();
-
-        // 3D Animated Character Container
+        // 3D Human-Like Character Container
         this.container3D = document.getElementById('avatar-3d-container');
         this.miku3D = new Miku3D(this.container3D);
 
@@ -44,9 +56,18 @@ class MikuApp {
         this.container2D = document.getElementById('avatar-2d-container');
         this.avatar2D = new AvatarEngine(this.container2D);
 
-        // Visualizer
+        // Web Audio F1/F2 Formant Analyzer & Visualizer (shared with TTSEngine!)
         this.vizCanvas = document.getElementById('audio-visualizer-canvas');
         this.visualizer = new AudioVisualizer(this.vizCanvas);
+        this.tts = new TTSEngine(this.visualizer);
+        this.stt = new STTEngine();
+
+        // Local Webcam Eye-Contact Tracker
+        this.perception = new PerceptionEngine((head) => {
+            if (this.miku3D) {
+                this.miku3D.setViewerGaze(head.x, head.y, true);
+            }
+        });
 
         // UI Elements
         this.statusBadge = document.getElementById('status-badge');
@@ -54,6 +75,7 @@ class MikuApp {
         this.dialogueCard = document.getElementById('dialogue-card');
         this.speakerName = document.getElementById('speaker-name');
         this.subtitleText = document.getElementById('subtitle-text');
+        this.latencyTelemetry = document.getElementById('latency-telemetry');
         this.userInput = document.getElementById('user-text-input');
         this.sendBtn = document.getElementById('send-btn');
         this.micBtn = document.getElementById('mic-btn');
@@ -62,6 +84,8 @@ class MikuApp {
         this.closeSettingsBtn = document.getElementById('close-settings-btn');
         this.viewModeToggle = document.getElementById('view-mode-toggle');
         this.brainToggleBtn = document.getElementById('brain-toggle-btn');
+        this.eyeContactBtn = document.getElementById('eye-contact-btn');
+        this.handsFreeBtn = document.getElementById('hands-free-btn');
 
         // Written text & Voice Controls
         this.dialogueUserPrompt = document.getElementById('dialogue-user-prompt');
@@ -75,18 +99,46 @@ class MikuApp {
         this.btnCloseChatHistory = document.getElementById('btn-close-chat-history');
         this.btnClearChatHistory = document.getElementById('btn-clear-chat-history');
 
+        this.typingIdleTimer = null;
+        this.lastTypingNodAt = 0;
+        this.lastUserActivityAt = Date.now();
+        this.proactiveTimer = null;
+
+        const greeting = this.memory.getPersonalizedGreeting();
         this.chatTurns = [];
         this.lastMikuResponse = {
             action: 'wave',
-            rawText: "Konnichiwa! I'm Hatsune Miku! Running locally & offline with nchapman/dolphin3.0-qwen2.5:3b! 🎵✨",
-            speechText: "Konnichiwa! I'm Hatsune Miku! Running locally and offline with Dolphin 3.0!"
+            rawText: greeting,
+            speechText: greeting
         };
 
         this.init();
     }
 
+    syncMemoryToBrains() {
+        const ctx = this.memory.buildPromptContext();
+        this.ollama.setMemoryContext(ctx);
+        this.gemini.setMemoryContext(ctx);
+    }
+
     getAiClient() {
         return this.aiProvider === 'ollama' ? this.ollama : this.gemini;
+    }
+
+    isModalOpen() {
+        return (this.settingsModal && this.settingsModal.classList.contains('active')) ||
+            (this.chatHistoryModal && this.chatHistoryModal.classList.contains('active'));
+    }
+
+    updateLatencyPill(text, highlight = false) {
+        if (!this.latencyTelemetry) return;
+        if (!text) {
+            this.latencyTelemetry.style.display = 'none';
+            return;
+        }
+        this.latencyTelemetry.style.display = 'inline-flex';
+        this.latencyTelemetry.textContent = text;
+        this.latencyTelemetry.style.color = highlight ? 'var(--miku-cyan)' : 'var(--miku-teal)';
     }
 
     async init() {
@@ -96,8 +148,17 @@ class MikuApp {
         this.bindMotionControls();
         this.bindSettings();
         this.updateBrainToggleUI();
+        this.updateHandsFreeUI();
+        this.renderMemoryBank();
+        this.startProactiveLifeLoop();
 
-        // Prime audio context on any user click on document
+        // Immediately display personalized episodic greeting (0ms synchronous, before async Ollama ping!)
+        const greeting = this.memory.getPersonalizedGreeting();
+        this.showSubtitle("Miku", greeting, 'happy');
+        this.addChatTurn('miku', greeting, 'wave', greeting);
+        this.executeMotion('wave');
+
+        // Prime audio context on first user gesture
         const unlockAudio = () => {
             this.tts.primeAudio();
             this.visualizer.ensureAudioContext();
@@ -107,14 +168,38 @@ class MikuApp {
         window.addEventListener('click', unlockAudio);
         window.addEventListener('keydown', unlockAudio);
 
-        // Check if local Ollama is active on startup
+        const touchActivity = () => { this.lastUserActivityAt = Date.now(); };
+        window.addEventListener('mousemove', touchActivity, { passive: true });
+        window.addEventListener('keydown', touchActivity, { passive: true });
+
+        // Detect local Ollama, auto-prefer compiled `miku-human:latest`, & silently pre-warm in RAM!
         try {
             const models = await this.ollama.listAvailableModels();
             if (models && models.length > 0) {
                 console.log(`[Init] Local Ollama detected with ${models.length} models:`, models);
+
+                const hasMikuHuman = models.some(m => m === 'miku-human:latest' || m === 'miku-human');
+                if (hasMikuHuman && !localStorage.getItem('miku_human_autoupgraded_v1')) {
+                    this.ollama.setModel('miku-human:latest');
+                    localStorage.setItem('miku_human_autoupgraded_v1', 'true');
+                } else if (!models.includes(this.ollama.model)) {
+                    const fallbackChat = hasMikuHuman
+                        ? 'miku-human:latest'
+                        : (models.find(m => !m.endsWith('-base')) || this.ollama.model);
+                    this.ollama.setModel(fallbackChat);
+                }
+
                 if (!localStorage.getItem('ai_provider') || (this.aiProvider === 'gemini' && !this.gemini.apiKey)) {
                     this.aiProvider = 'ollama';
                     localStorage.setItem('ai_provider', 'ollama');
+                }
+                if (this.aiProvider === 'ollama' && this.ollama.turboMode) {
+                    this.updateLatencyPill('⚡ Warming Neural Core...');
+                    this.ollama.warmUpModel().then((ok) => {
+                        if (ok && this.aiProvider === 'ollama') {
+                            this.updateLatencyPill('⚡ Instant Warm Ready', true);
+                        }
+                    });
                 }
             }
         } catch (e) {
@@ -124,26 +209,47 @@ class MikuApp {
         this.updateBrainToggleUI();
 
         if (this.aiProvider === 'ollama') {
-            this.setStatus('idle', `Ollama: ${this.ollama.model} (Offline)`);
-            this.showSubtitle("Miku", `Konnichiwa! I'm Hatsune Miku! Running locally & offline with ${this.ollama.model}! 🎵✨`, 'happy');
-            this.executeMotion('wave');
+            this.setStatus('idle', `Ollama: ${this.ollama.model}`);
         } else {
             if (!this.gemini.apiKey) {
                 this.setStatus('idle', 'Gemini API Key required');
                 setTimeout(() => { this.openSettings(true); }, 600);
             } else {
                 this.setStatus('idle', `Gemini: ${this.gemini.model}`);
-                this.showSubtitle("Miku", "Konnichiwa! I'm Hatsune Miku! I can move and talk in any language! ✨", 'happy');
-                this.executeMotion('wave');
             }
         }
+    }
+
+    /**
+     * Autonomous Human Idle Companion Presence:
+     * When sitting quietly together for >50s, Miku occasionally stretches her shoulders or shifts thoughtfully!
+     */
+    startProactiveLifeLoop() {
+        if (this.proactiveTimer) clearInterval(this.proactiveTimer);
+        this.proactiveTimer = setInterval(() => {
+            if (this.status !== 'idle' || this.viewMode !== '3d' || this.tts.isSpeaking) return;
+            const idleMs = Date.now() - this.lastUserActivityAt;
+            if (idleMs > 50000 && this.miku3D.currentAction === 'idle') {
+                this.lastUserActivityAt = Date.now() - 15000;
+                const lifeActions = ['stretch', 'shrug', 'think'];
+                const pick = lifeActions[Math.floor(Math.random() * lifeActions.length)];
+                this.executeMotion(pick);
+                if (pick === 'think') {
+                    setTimeout(() => {
+                        if (this.status === 'idle' && this.miku3D.currentAction === 'think') {
+                            this.executeMotion('idle');
+                        }
+                    }, 4200);
+                }
+            }
+        }, 12000);
     }
 
     updateBrainToggleUI() {
         if (!this.brainToggleBtn) return;
         if (this.aiProvider === 'ollama') {
             this.brainToggleBtn.textContent = '🦙 Ollama (Offline)';
-            this.brainToggleBtn.title = 'Active Engine: 100% Local Ollama (Completely offline). Click to switch to Gemini Cloud.';
+            this.brainToggleBtn.title = `Active Engine: Local Ollama (${this.ollama.model}). Click to switch to Gemini Cloud.`;
             this.brainToggleBtn.style.borderColor = 'var(--miku-cyan)';
             this.brainToggleBtn.style.color = 'var(--miku-cyan)';
         } else {
@@ -151,7 +257,29 @@ class MikuApp {
             this.brainToggleBtn.title = 'Active Engine: Google Gemini Cloud. Click to switch to Local Ollama.';
             this.brainToggleBtn.style.borderColor = 'var(--miku-pink)';
             this.brainToggleBtn.style.color = 'var(--miku-pink)';
+            this.updateLatencyPill('');
         }
+    }
+
+    updateHandsFreeUI() {
+        const active = this.stt.handsFreeMode;
+        if (this.handsFreeBtn) {
+            this.handsFreeBtn.classList.toggle('active', active);
+            this.handsFreeBtn.textContent = active ? '🎙️ Hands-Free: ON' : '🎙️ Hands-Free';
+        }
+        const hfCheck = document.getElementById('cfg-hands-free');
+        if (hfCheck) hfCheck.checked = active;
+    }
+
+    renderMemoryBank() {
+        const box = document.getElementById('memory-bank-list');
+        if (!box) return;
+        const items = this.memory.getSummaryItems();
+        if (!items.length) {
+            box.innerHTML = '<span style="color: var(--text-muted); font-size: 12px;">Tell Miku your name, favorite drinks/music, or what you\'re working on—she\'ll remember across sessions!</span>';
+            return;
+        }
+        box.innerHTML = items.map(item => `<span class="memory-chip">${escapeHtml(item)}</span>`).join('');
     }
 
     setAiProvider(provider) {
@@ -166,12 +294,17 @@ class MikuApp {
         }
 
         if (provider === 'ollama') {
-            this.setStatus('idle', `Ollama: ${this.ollama.model} (Offline)`);
-            this.showSubtitle("Miku", `Switched to 100% offline local AI (${this.ollama.model})! 🦙✨`, 'happy');
+            this.setStatus('idle', `Ollama: ${this.ollama.model}`);
+            this.showSubtitle("Miku", `Switched to local AI (${this.ollama.model})!`, 'happy');
             this.executeMotion('wave');
+            if (this.ollama.turboMode) {
+                this.ollama.warmUpModel().then((ok) => {
+                    if (ok) this.updateLatencyPill('⚡ Instant Warm Ready', true);
+                });
+            }
         } else {
             this.setStatus('idle', `Gemini: ${this.gemini.model}`);
-            this.showSubtitle("Miku", `Switched to Google Gemini Cloud (${this.gemini.model})! ☁️✨`, 'happy');
+            this.showSubtitle("Miku", `Switched to Google Gemini Cloud (${this.gemini.model})!`, 'happy');
             this.executeMotion('wave');
         }
     }
@@ -183,16 +316,17 @@ class MikuApp {
         if (mode === '3d') {
             this.container3D.style.display = 'block';
             this.container2D.style.display = 'none';
-            if (this.viewModeToggle) this.viewModeToggle.textContent = 'Switch to 2D Mode 🎨';
+            if (this.viewModeToggle) this.viewModeToggle.textContent = '2D Mode 🎨';
             if (this.miku3D) {
                 this.miku3D.handleResize();
             }
         } else {
             this.container3D.style.display = 'none';
             this.container2D.style.display = 'flex';
-            if (this.viewModeToggle) this.viewModeToggle.textContent = 'Switch to 3D Mode 🌟';
+            if (this.viewModeToggle) this.viewModeToggle.textContent = '3D Mode 🌟';
         }
     }
+
 
     setStatus(status, message) {
         this.status = status;
@@ -207,13 +341,12 @@ class MikuApp {
     }
 
     executeMotion(actionName) {
-        // Highlight active motion button in UI
         const motionBtns = document.querySelectorAll('.motion-btn');
         motionBtns.forEach(b => {
-            if (b.dataset.action === actionName || 
-               (b.dataset.action === 'cross_arms' && actionName === 'crossArms') ||
-               (b.dataset.action === 'reach' && actionName === 'reachHand') ||
-               (b.dataset.action === 'shake_head' && actionName === 'shakeHead')) {
+            if (b.dataset.action === actionName ||
+                (b.dataset.action === 'cross_arms' && actionName === 'crossArms') ||
+                (b.dataset.action === 'reach' && actionName === 'reachHand') ||
+                (b.dataset.action === 'shake_head' && actionName === 'shakeHead')) {
                 b.classList.add('active');
             } else {
                 b.classList.remove('active');
@@ -221,32 +354,23 @@ class MikuApp {
         });
 
         if (this.viewMode === '3d') {
-            switch (actionName) {
-                case 'wave':        this.miku3D.wave(); break;
-                case 'nod':         this.miku3D.nod(); break;
-                case 'cross_arms':
-                case 'crossArms':   this.miku3D.crossArms(); break;
-                case 'reach':
-                case 'reachHand':   this.miku3D.reachHand(); break;
-                case 'shy':         this.miku3D.shyPose(); break;
-                case 'think':       this.miku3D.thinkPose(); break;
-                case 'pout':        this.miku3D.poutPose(); break;
-                case 'shake_head':
-                case 'shakeHead':   this.miku3D.shakeHead(); break;
-                case 'wink':        this.miku3D.wink(); break;
-                case 'cheer':
-                case 'celebrate':   this.miku3D.cheer(); break;
-                default:            this.miku3D.setAction('idle'); break;
-            }
+            this.miku3D.setAction(actionName);
         } else {
             const poseMap = {
                 wave: 'happy',
                 reach: 'happy',
                 cheer: 'happy',
                 celebrate: 'happy',
+                laugh: 'happy',
                 wink: 'happy',
+                explain: 'happy',
+                stretch: 'happy',
+                shrug: 'neutral',
                 cross_arms: 'neutral',
+                surprise: 'happy',
                 shy: 'shy',
+                empathy: 'shy',
+                listen: 'neutral',
                 think: 'shy',
                 pout: 'neutral',
                 idle: 'neutral'
@@ -264,10 +388,69 @@ class MikuApp {
         this.userInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                clearTimeout(this.typingIdleTimer);
                 this.tts.primeAudio();
                 this.handleUserSubmit();
             }
         });
+
+        // Human Typing Presence: Miku attentively notices you typing and gives subtle backchannel micro-nods!
+        this.userInput.addEventListener('input', () => {
+            this.lastUserActivityAt = Date.now();
+            if (this.status !== 'idle') return;
+            const val = this.userInput.value;
+            if (val.length === 1 && this.miku3D.currentAction === 'idle') {
+                this.miku3D.listenPose();
+            } else if (val.length > 0 && performance.now() - this.lastTypingNodAt > 2400) {
+                this.lastTypingNodAt = performance.now();
+                this.miku3D.triggerBackchannelNod();
+            }
+
+            clearTimeout(this.typingIdleTimer);
+            this.typingIdleTimer = setTimeout(() => {
+                if (this.status === 'idle' && !this.userInput.value.trim()) {
+                    this.miku3D.resetToIdle();
+                }
+            }, 4000);
+        });
+
+        // Webcam Eye-Contact Header Toggle
+        if (this.eyeContactBtn) {
+            this.eyeContactBtn.addEventListener('click', async () => {
+                if (this.perception.active) {
+                    this.perception.stop();
+                    this.miku3D.setViewerGaze(0, 0, false);
+                    this.eyeContactBtn.classList.remove('active');
+                    this.eyeContactBtn.textContent = '👁️ Eye Contact';
+                    this.setStatus('idle', 'Cursor gaze active');
+                } else {
+                    try {
+                        await this.perception.start();
+                        this.eyeContactBtn.classList.add('active');
+                        this.eyeContactBtn.textContent = '👁️ Eye Contact: ON';
+                        this.setStatus('idle', 'Webcam eye-contact locked');
+                    } catch (err) {
+                        this.setStatus('idle', `Camera: ${err.message}`);
+                    }
+                }
+            });
+        }
+
+        // Hands-Free Continuous Talk Header Toggle
+        if (this.handsFreeBtn) {
+            this.handsFreeBtn.addEventListener('click', () => {
+                this.tts.primeAudio();
+                const next = !this.stt.handsFreeMode;
+                this.stt.setHandsFreeMode(next);
+                this.updateHandsFreeUI();
+                if (next && this.status === 'idle') {
+                    this.startListening();
+                } else if (!next && this.status === 'listening') {
+                    this.stt.stop();
+                    this.setStatus('idle', 'Ready');
+                }
+            });
+        }
 
         // Brain switcher header toggle
         if (this.brainToggleBtn) {
@@ -281,12 +464,13 @@ class MikuApp {
             });
         }
 
-        // Microphone Button: Click once to talk, click again to immediately submit!
+        // Microphone Button (with human barge-in support: interrupts Miku immediately if she is speaking!)
         this.micBtn.addEventListener('click', () => {
             this.tts.primeAudio();
             if (this.status === 'listening') {
                 this.stt.triggerFinalResult();
             } else {
+                this.ollama.abortActiveRequest();
                 this.startListening();
             }
         });
@@ -300,13 +484,11 @@ class MikuApp {
         }
 
         // Spacebar push-to-talk (disabled when typing or inside modal popups)
-        const isModalOpen = () => (this.settingsModal && this.settingsModal.classList.contains('active')) ||
-                                  (this.chatHistoryModal && this.chatHistoryModal.classList.contains('active'));
-
         window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space' && document.activeElement !== this.userInput && !isModalOpen()) {
-                if (this.status !== 'listening' && this.status !== 'thinking') {
+            if (e.code === 'Space' && document.activeElement !== this.userInput && !this.isModalOpen()) {
+                if (this.status !== 'listening') {
                     e.preventDefault();
+                    this.ollama.abortActiveRequest();
                     this.tts.primeAudio();
                     this.startListening();
                 }
@@ -314,7 +496,7 @@ class MikuApp {
         });
 
         window.addEventListener('keyup', (e) => {
-            if (e.code === 'Space' && document.activeElement !== this.userInput && !isModalOpen()) {
+            if (e.code === 'Space' && document.activeElement !== this.userInput && !this.isModalOpen()) {
                 if (this.status === 'listening') {
                     e.preventDefault();
                     this.stt.triggerFinalResult();
@@ -324,7 +506,6 @@ class MikuApp {
     }
 
     bindDialogueActions() {
-        // 🔊 Replay Voice Button: Immediately speaks Miku's response with 3D lip-sync & animation
         if (this.btnReplayVoice) {
             this.btnReplayVoice.addEventListener('click', () => {
                 this.tts.primeAudio();
@@ -332,12 +513,11 @@ class MikuApp {
                     this.speakMikuResponse(this.lastMikuResponse.speechText, this.lastMikuResponse.action);
                 } else {
                     const text = this.subtitleText.textContent.trim();
-                    if (text) this.speakMikuResponse(text, 'wave');
+                    if (text) this.speakMikuResponse(text, 'explain');
                 }
             });
         }
 
-        // 📋 Copy Button: Copies Miku's written text to clipboard
         if (this.btnCopyReply) {
             this.btnCopyReply.addEventListener('click', () => {
                 const textToCopy = this.subtitleText.textContent.trim();
@@ -351,7 +531,6 @@ class MikuApp {
             });
         }
 
-        // 💬 Chat History Log Modal
         if (this.btnToggleChatLog) {
             this.btnToggleChatLog.addEventListener('click', () => this.openChatHistory());
         }
@@ -406,7 +585,7 @@ class MikuApp {
         if (!this.chatTurns.length) {
             this.chatHistoryList.innerHTML = `
                 <div style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 24px;">
-                    No conversation history yet. Start speaking or typing to Miku! 🎵
+                    No conversation history yet. Start speaking or typing to Miku!
                 </div>
             `;
             return;
@@ -437,18 +616,15 @@ class MikuApp {
             this.chatHistoryList.appendChild(div);
         });
 
-        // Auto-scroll transcript container to latest turn
-        this.chatHistoryList.scrollTop = this.chatHistoryList.scrollHeight;
-
-        // Wire turn buttons
         const speakBtns = this.chatHistoryList.querySelectorAll('.btn-turn-speak');
         speakBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const idx = parseInt(btn.dataset.idx, 10);
                 const turn = this.chatTurns[idx];
                 if (turn) {
-                    this.executeMotion(turn.action || 'wave');
-                    this.speakMikuResponse(turn.speechText || turn.text, turn.action || 'wave');
+                    this.tts.primeAudio();
+                    this.executeMotion(turn.action || 'explain');
+                    this.speakMikuResponse(turn.speechText || turn.text, turn.action || 'explain');
                 }
             });
         });
@@ -466,15 +642,14 @@ class MikuApp {
             });
         });
 
-        // Auto-scroll to bottom
         this.chatHistoryList.scrollTop = this.chatHistoryList.scrollHeight;
     }
 
     startListening() {
         this.tts.stop();
         this.setStatus('listening', 'Listening to you...');
-        this.showSubtitle("You", "Listening... (Speak now)", 'neutral');
-        this.executeMotion('think');
+        this.showSubtitle("You", "Listening... (Speak naturally)", 'neutral');
+        this.executeMotion('listen');
 
         this.stt.start(
             (finalText) => {
@@ -484,6 +659,7 @@ class MikuApp {
                     this.handleUserSubmit();
                 } else {
                     this.setStatus('idle', 'Ready');
+                    this.miku3D.resetToIdle();
                 }
             },
             (interimText) => {
@@ -492,11 +668,38 @@ class MikuApp {
             },
             () => { this.setStatus('listening', 'Miku is listening...'); },
             () => {
-                if (this.status === 'listening') this.setStatus('idle', 'Ready');
+                if (this.status === 'listening') {
+                    this.setStatus('idle', 'Ready');
+                    this.miku3D.resetToIdle();
+                }
                 this.visualizer.setSimulatedVolume(0);
             },
-            (err) => { this.setStatus('idle', `Mic: ${err}`); }
+            (err) => {
+                this.setStatus('idle', `Mic: ${err}`);
+                this.miku3D.resetToIdle();
+            }
         );
+    }
+
+    _onSpeechFinished() {
+        this.miku3D.setMouthOpenness(0);
+        this.avatar2D.setMouthOpenness(0);
+        this.visualizer.setSimulatedVolume(0);
+        this.setStatus('idle', 'Ready to chat');
+        if (this.btnReplayVoice) {
+            this.btnReplayVoice.textContent = '🔊 Replay Voice';
+        }
+        if (this.viewMode === '3d') {
+            this.miku3D.resetToIdle();
+        }
+        // Hands-Free Continuous Talk: automatically re-open mic 420ms after Miku finishes speaking!
+        if (this.stt.handsFreeMode && !this.isModalOpen()) {
+            setTimeout(() => {
+                if (this.status === 'idle' && this.stt.handsFreeMode && !this.isModalOpen()) {
+                    this.startListening();
+                }
+            }, 420);
+        }
     }
 
     async handleUserSubmit() {
@@ -504,33 +707,52 @@ class MikuApp {
         if (!text) return;
 
         this.userInput.value = '';
+        this.lastUserActivityAt = Date.now();
+        clearTimeout(this.typingIdleTimer);
+
+        // Human Barge-In: cancel any previous overlapping speech or generation immediately
+        this.ollama.abortActiveRequest();
         this.tts.stop();
         this.stt.stop();
 
-        // 1. Display user prompt in upper preview badge so user context never disappears
+        // Extract & persist personal episodic memory BEFORE sending to brain!
+        this.memory.observeUserMessage(text);
+        this.syncMemoryToBrains();
+        this.renderMemoryBank();
+
+        // 1. Display user prompt context ribbon
         if (this.dialogueUserPrompt && this.dialogueUserText) {
             this.dialogueUserPrompt.style.display = 'flex';
             this.dialogueUserText.textContent = text;
         }
 
-        // 2. Add user turn to conversation transcript
+        // 2. Record user turn in transcript
         this.addChatTurn('user', text);
 
         const isOllama = this.aiProvider === 'ollama';
         const providerName = isOllama
-            ? `Local Ollama (${this.ollama.model})` 
+            ? `Local Ollama (${this.ollama.model})`
             : `Gemini (${this.gemini.model})`;
-        const providerShort = isOllama ? 'Dolphin 3.0' : 'Gemini';
+        const providerShort = isOllama ? this.ollama.model : 'Gemini';
 
         this.setStatus('thinking', `Miku is thinking via ${providerName}...`);
-        this.executeMotion('think');
+        if (isOllama && this.viewMode === '3d') {
+            this.miku3D.setInferenceThrottle(true);
+        }
 
-        // 3. Immediately show thinking animation in dialogue card
+        // 3. Instant (<40ms) Pre-Verbal Human Reaction (inspiratory breath + eyebrow flash / cognitive gaze shift!)
+        const userIntent = this.ollama.detectUserIntent(text);
+        if (this.viewMode === '3d') {
+            this.miku3D.preSpeechReaction(userIntent);
+        } else {
+            this.executeMotion('think');
+        }
+
         const thinkingTimeout = setTimeout(() => {
             if (this.status === 'thinking') {
                 this.showSubtitleHtml("Miku", `
                     <div class="thinking-wave">
-                        <span>Thinking via ${providerShort}</span>
+                        <span>Thinking (${escapeHtml(providerShort)})</span>
                         <span class="thinking-dots">
                             <span class="thinking-dot"></span>
                             <span class="thinking-dot"></span>
@@ -539,14 +761,44 @@ class MikuApp {
                     </div>
                 `);
             }
-        }, 180);
+        }, 140);
 
         try {
             const aiClient = this.getAiClient();
             let actionFired = false;
 
             if (isOllama) {
-                // Real-time token streaming with live written text updates & instant gesture trigger!
+                const useStreamingVoice = this.ollama.turboMode;
+                let clausesEnqueued = 0;
+
+                if (useStreamingVoice) {
+                    this.tts.beginStreamSession({
+                        onPhoneme: (openness, viseme) => {
+                            this.miku3D.setMouthOpenness(openness, viseme);
+                            this.avatar2D.setMouthOpenness(openness);
+                            this.visualizer.setSimulatedVolume(openness);
+                        },
+                        onClauseAction: (clauseAction) => {
+                            if (clauseAction) this.executeMotion(clauseAction);
+                        },
+                        onStart: (voiceName) => {
+                            this.setStatus('speaking', `Speaking (${voiceName})`);
+                            if (this.btnReplayVoice) {
+                                this.btnReplayVoice.classList.remove('pulse-glow');
+                                this.btnReplayVoice.textContent = '🔊 Speaking...';
+                            }
+                        },
+                        onEnd: () => this._onSpeechFinished(),
+                        onError: (errCode) => {
+                            console.warn("[TTS] Voice output notice:", errCode);
+                            if (this.btnReplayVoice) {
+                                this.btnReplayVoice.textContent = '🔊 Click to Speak Voice';
+                                this.btnReplayVoice.classList.add('pulse-glow');
+                            }
+                        }
+                    });
+                }
+
                 const result = await aiClient.sendMessageStream(
                     text,
                     (chunk) => {
@@ -555,36 +807,60 @@ class MikuApp {
                             actionFired = true;
                             this.executeMotion(chunk.action);
                         }
-                        this.showSubtitleHtml("Miku", `${chunk.partialText}<span class="streaming-cursor"></span>`);
+                        if (chunk.ttftMs) {
+                            this.updateLatencyPill(`⚡ ${(chunk.ttftMs / 1000).toFixed(2)}s first token`, true);
+                        }
+                        this.showSubtitleHtml("Miku", `${escapeHtml(chunk.partialText)}<span class="streaming-cursor"></span>`);
                     },
                     (detectedAction) => {
                         if (!actionFired && detectedAction) {
                             actionFired = true;
                             this.executeMotion(detectedAction);
                         }
-                    }
+                    },
+                    useStreamingVoice ? (clause) => {
+                        clausesEnqueued++;
+                        this.tts.enqueueClause(clause.speechText, clause.action);
+                    } : null
                 );
 
                 clearTimeout(thinkingTimeout);
-                this.handleMikuResponse(result);
+                this.miku3D.setInferenceThrottle(false);
+                if (!result) return;
+
+                if (result.metrics) {
+                    this.updateLatencyPill(`⚡ ${(result.metrics.ttftMs / 1000).toFixed(2)}s TTFT • ${result.metrics.tokensPerSec} tok/s`, true);
+                }
+
+                if (useStreamingVoice && clausesEnqueued > 0) {
+                    this.lastMikuResponse = result;
+                    this.showSubtitle("Miku", result.rawText, result.action);
+                    this.addChatTurn('miku', result.rawText, result.action, result.speechText);
+                    this.tts.endStreamSession();
+                } else {
+                    this.handleMikuResponse(result);
+                }
             } else {
-                // Gemini API multi-turn call
                 const result = await aiClient.sendMessage(text);
                 clearTimeout(thinkingTimeout);
                 this.handleMikuResponse(result);
             }
         } catch (err) {
             clearTimeout(thinkingTimeout);
+            this.miku3D.setInferenceThrottle(false);
+            if (err.name === 'AbortError') {
+                return;
+            }
             console.error("AI Generation Error:", err);
             this.setStatus('idle', 'Error occurred');
 
             let helpfulAdvice = err.message;
             if (isOllama && err.message.includes('Cannot connect')) {
-                helpfulAdvice = `Could not connect to Ollama at ${this.ollama.host}. Is Ollama running in background? (Try starting 'ollama serve' or open Ollama app). You can also click the top Brain button to switch to Gemini!`;
+                helpfulAdvice = `Could not connect to Ollama at ${this.ollama.host}. Is Ollama running in background? (Start 'ollama serve' or open Ollama app).`;
             }
 
             this.showSubtitle("Miku", `Oops! ${helpfulAdvice}`, 'crying');
-            this.executeMotion('shy');
+            this.executeMotion('empathy');
         }
     }
 
@@ -592,17 +868,12 @@ class MikuApp {
         const { action, rawText, speechText } = response;
         this.lastMikuResponse = response;
 
-        // 1. Display written text of what she replied prominently in the dialogue card
         this.showSubtitle("Miku", rawText, action);
-
-        // 2. Add Miku's turn to written chat transcript
         this.addChatTurn('miku', rawText, action, speechText);
-
-        // 3. Immediately speak the response aloud with real-time lip-sync & 3D body motion!
         this.speakMikuResponse(speechText, action);
     }
 
-    speakMikuResponse(speechText, action = 'wave') {
+    speakMikuResponse(speechText, action = 'explain') {
         this.setStatus('speaking', `Miku is speaking [${action}]`);
         this.executeMotion(action);
 
@@ -611,44 +882,36 @@ class MikuApp {
             this.btnReplayVoice.textContent = '🔊 Speaking...';
         }
 
-        // Real-time lip-sync driving 3D and 2D mouths
         this.tts.speak(
             speechText,
-            (openness) => {
-                this.miku3D.setMouthOpenness(openness);
+            (openness, viseme) => {
+                this.miku3D.setMouthOpenness(openness, viseme);
                 this.avatar2D.setMouthOpenness(openness);
                 this.visualizer.setSimulatedVolume(openness);
             },
             (voiceName) => {
                 this.setStatus('speaking', `Speaking (${voiceName})`);
             },
-            () => {
-                this.miku3D.setMouthOpenness(0);
-                this.avatar2D.setMouthOpenness(0);
-                this.visualizer.setSimulatedVolume(0);
-                this.setStatus('idle', 'Ready to chat');
-                if (this.btnReplayVoice) {
-                    this.btnReplayVoice.textContent = '🔊 Replay Voice';
-                }
-            },
+            () => this._onSpeechFinished(),
             (errCode) => {
                 console.warn("[TTS] Voice output notice:", errCode);
                 if (this.btnReplayVoice) {
                     this.btnReplayVoice.textContent = '🔊 Click to Speak Voice';
                     this.btnReplayVoice.classList.add('pulse-glow');
                 }
-            }
+            },
+            action
         );
     }
 
-    showSubtitle(speaker, text, emotion = 'neutral') {
+    showSubtitle(speaker, text) {
         this.dialogueCard.classList.remove('hidden');
         this.speakerName.textContent = speaker;
         this.speakerName.className = `speaker-label ${speaker.toLowerCase()}`;
         this.subtitleText.textContent = text;
 
         if (window.gsap) {
-            gsap.fromTo(this.dialogueCard, { y: 4, opacity: 0.9 }, { y: 0, opacity: 1, duration: 0.25, ease: "power2.out" });
+            gsap.fromTo(this.dialogueCard, { y: 4, opacity: 0.92 }, { y: 0, opacity: 1, duration: 0.22, ease: "power2.out" });
         }
     }
 
@@ -663,6 +926,7 @@ class MikuApp {
         const motionBtns = document.querySelectorAll('.motion-btn');
         motionBtns.forEach(btn => {
             btn.addEventListener('click', () => {
+                this.lastUserActivityAt = Date.now();
                 const action = btn.dataset.action;
                 this.executeMotion(action);
                 motionBtns.forEach(b => b.classList.remove('active'));
@@ -682,21 +946,20 @@ class MikuApp {
             if (e.target === this.settingsModal) this.closeSettings();
         });
 
-        // Provider Selector
         const providerSelect = document.getElementById('cfg-ai-provider');
         const ollamaSection = document.getElementById('section-ollama-settings');
         const geminiSection = document.getElementById('section-gemini-settings');
 
-        // Ollama Inputs
         const ollamaHostInput = document.getElementById('cfg-ollama-host');
         const ollamaModelSelect = document.getElementById('cfg-ollama-model');
         const ollamaCustomInput = document.getElementById('cfg-ollama-custom-model');
+        const ollamaTurboCheck = document.getElementById('cfg-ollama-turbo');
+        const ollamaThreadsSelect = document.getElementById('cfg-ollama-threads');
         const btnDetectOllama = document.getElementById('btn-detect-ollama');
         const ollamaDetectStatus = document.getElementById('ollama-detect-status');
         const btnTestOllama = document.getElementById('btn-test-ollama');
         const ollamaDiagPanel = document.getElementById('ollama-diagnostics-panel');
 
-        // Gemini Inputs
         const apiKeyInput = document.getElementById('cfg-api-key');
         const modelSelect = document.getElementById('cfg-model');
         const customModelInput = document.getElementById('cfg-custom-model');
@@ -705,18 +968,19 @@ class MikuApp {
         const diagBtn = document.getElementById('btn-run-diagnostics');
         const diagPanel = document.getElementById('diagnostics-panel');
 
-        // Speech & Audio Inputs
+        const ttsModeSelect = document.getElementById('cfg-tts-mode');
+        const handsFreeCheck = document.getElementById('cfg-hands-free');
         const langSelect = document.getElementById('cfg-stt-lang');
         const voiceSelect = document.getElementById('cfg-tts-voice');
         const pitchSlider = document.getElementById('cfg-tts-pitch');
         const rateSlider = document.getElementById('cfg-tts-rate');
         const pitchVal = document.getElementById('cfg-pitch-val');
         const rateVal = document.getElementById('cfg-rate-val');
+        const btnClearMemory = document.getElementById('btn-clear-memory');
 
         const testVoiceBtn = document.getElementById('btn-test-voice');
         const saveBtn = document.getElementById('btn-save-settings');
 
-        // 1. Initialize Provider Selection
         if (providerSelect) {
             providerSelect.value = this.aiProvider;
             const updateProviderSections = () => {
@@ -728,8 +992,20 @@ class MikuApp {
             providerSelect.addEventListener('change', updateProviderSections);
         }
 
-        // 2. Initialize Ollama Fields
         if (ollamaHostInput) ollamaHostInput.value = this.ollama.host;
+        if (ollamaTurboCheck) ollamaTurboCheck.checked = this.ollama.turboMode;
+        if (ollamaThreadsSelect) ollamaThreadsSelect.value = String(this.ollama.cpuThreads);
+        if (ttsModeSelect) ttsModeSelect.value = this.tts.engineMode;
+        if (handsFreeCheck) handsFreeCheck.checked = this.stt.handsFreeMode;
+
+        if (btnClearMemory) {
+            btnClearMemory.addEventListener('click', () => {
+                this.memory.clear();
+                this.syncMemoryToBrains();
+                this.renderMemoryBank();
+            });
+        }
+
         if (ollamaModelSelect) {
             const ollamaOpts = Array.from(ollamaModelSelect.options).map(o => o.value);
             if (ollamaOpts.includes(this.ollama.model)) {
@@ -751,7 +1027,6 @@ class MikuApp {
             });
         }
 
-        // Detect Local Ollama Models
         if (btnDetectOllama) {
             btnDetectOllama.addEventListener('click', async () => {
                 const host = (ollamaHostInput?.value || this.ollama.host).trim();
@@ -768,12 +1043,12 @@ class MikuApp {
                     const models = await this.ollama.listAvailableModels();
                     if (models && models.length > 0) {
                         ollamaModelSelect.innerHTML = '';
-                        models.forEach(m => {
+                        models.filter(m => !m.endsWith('-base')).forEach(m => {
                             const opt = document.createElement('option');
                             opt.value = m;
-                            opt.textContent = m === 'nchapman/dolphin3.0-qwen2.5:3b' 
-                                ? `${m} (Recommended Dolphin Idol)` 
-                                : m;
+                            opt.textContent = m === 'miku-human:latest'
+                                ? `${m} (Compiled Human Persona - Fastest)`
+                                : (m === 'nchapman/dolphin3.0-qwen2.5:3b' ? `${m} (Base Qwen 2.5 3B)` : m);
                             ollamaModelSelect.appendChild(opt);
                         });
 
@@ -809,7 +1084,6 @@ class MikuApp {
             });
         }
 
-        // Live Test Ollama Connection
         if (btnTestOllama) {
             btnTestOllama.addEventListener('click', async () => {
                 const host = (ollamaHostInput?.value || this.ollama.host).trim();
@@ -819,10 +1093,11 @@ class MikuApp {
 
                 this.ollama.setHost(host);
                 this.ollama.setModel(chosenModel);
+                if (ollamaThreadsSelect) this.ollama.setCpuThreads(ollamaThreadsSelect.value);
 
                 if (ollamaDiagPanel) {
                     ollamaDiagPanel.style.display = 'block';
-                    ollamaDiagPanel.innerHTML = '<span style="color:var(--miku-cyan)">⏳ Ping testing local Ollama instance & model...</span>';
+                    ollamaDiagPanel.innerHTML = '<span style="color:var(--miku-cyan)">⏳ Benchmarking & warming local neural core...</span>';
                 }
                 btnTestOllama.disabled = true;
 
@@ -831,23 +1106,24 @@ class MikuApp {
                     if (ollamaDiagPanel) {
                         if (diag.success) {
                             ollamaDiagPanel.innerHTML = `
-                                <div style="color:#00f3ff; margin-bottom:3px;">✅ <strong>Local Ollama Online & Ready!</strong></div>
+                                <div style="color:#00f3ff; margin-bottom:3px;">✅ <strong>Local Neural Core Online & Pre-Warmed!</strong></div>
                                 <div>• Host: <code>${diag.host}</code></div>
                                 <div>• Active Model: <strong>${diag.model}</strong></div>
-                                <div>• Roundtrip Latency: <strong>${diag.latencyMs}ms</strong> (Completely offline & local)</div>
-                                <div style="color:#39c5bb; margin-top:4px;">✨ 100% private, free & offline operation confirmed.</div>
+                                <div>• Warm Latency: <strong>${diag.latencyMs}ms</strong> ${diag.tokensPerSec ? `(${diag.tokensPerSec} tok/s)` : ''}</div>
+                                <div style="color:#39c5bb; margin-top:4px;">✨ Pinned in RAM (30m keep-alive) & ready for instant voice talk-back!</div>
                             `;
+                            this.updateLatencyPill('⚡ Instant Warm Ready', true);
                         } else {
                             ollamaDiagPanel.innerHTML = `
                                 <div style="color:#ff6b6b; margin-bottom:3px;">❌ <strong>Ollama Offline or Error:</strong></div>
-                                <div>${diag.error}</div>
+                                <div>${escapeHtml(diag.error)}</div>
                                 <div style="color:#ffaa44; margin-top:4px;">💡 Tip: Open terminal and type <code>ollama serve</code> or launch the Ollama app.</div>
                             `;
                         }
                     }
                 } catch (e) {
                     if (ollamaDiagPanel) {
-                        ollamaDiagPanel.innerHTML = `<span style="color:#ff6b6b">❌ Diagnostic error: ${e.message}</span>`;
+                        ollamaDiagPanel.innerHTML = `<span style="color:#ff6b6b">❌ Diagnostic error: ${escapeHtml(e.message)}</span>`;
                     }
                 } finally {
                     btnTestOllama.disabled = false;
@@ -855,7 +1131,6 @@ class MikuApp {
             });
         }
 
-        // 3. Initialize Gemini Fields
         if (apiKeyInput) apiKeyInput.value = this.gemini.apiKey;
         if (modelSelect) {
             const existingOptions = Array.from(modelSelect.options).map(o => o.value);
@@ -899,10 +1174,11 @@ class MikuApp {
                 detectBtn.disabled = true;
 
                 try {
-                    const models = await this.gemini.listModels(key);
+                    this.gemini.setApiKey(key);
+                    const models = await this.gemini.listAvailableModels();
                     if (models && models.length > 0) {
                         modelSelect.innerHTML = '';
-                        const topModels = ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-2.5-flash'];
+                        const topModels = ['gemini-3.8-flash', 'gemini-3.8-pro'];
                         topModels.forEach(tm => {
                             if (!models.includes(tm)) models.unshift(tm);
                         });
@@ -910,8 +1186,8 @@ class MikuApp {
                         models.forEach(m => {
                             const opt = document.createElement('option');
                             opt.value = m;
-                            opt.textContent = m === 'gemini-3.8-flash' 
-                                ? `${m} (Active Production - Recommended)` 
+                            opt.textContent = m === 'gemini-3.8-flash'
+                                ? `${m} (Active Production - Recommended)`
                                 : (m === 'gemini-3.8-pro' ? `${m} (Flagship Reasoning)` : m);
                             modelSelect.appendChild(opt);
                         });
@@ -921,12 +1197,7 @@ class MikuApp {
                         customOpt.textContent = 'Custom Model ID...';
                         modelSelect.appendChild(customOpt);
 
-                        if (models.includes(this.gemini.model) || topModels.includes(this.gemini.model)) {
-                            modelSelect.value = this.gemini.model;
-                        } else {
-                            modelSelect.value = models[0];
-                        }
-
+                        modelSelect.value = models.includes(this.gemini.model) ? this.gemini.model : models[0];
                         if (customModelInput) {
                             customModelInput.style.display = modelSelect.value === 'custom' ? 'block' : 'none';
                         }
@@ -981,7 +1252,7 @@ class MikuApp {
 
                         let summary = '';
                         if (diag.recommendedModel) {
-                            summary = `<div style="margin-top:6px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.2); color:#39c5bb;"><strong>Recommended Active Model:</strong> ${diag.recommendedModel} (Auto-selected in dropdown)</div>`;
+                            summary = `<div style="margin-top:6px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.2); color:#39c5bb;"><strong>Recommended Active Model:</strong> ${diag.recommendedModel}</div>`;
                             modelSelect.value = diag.recommendedModel;
                             this.gemini.setModel(diag.recommendedModel);
                         }
@@ -998,7 +1269,6 @@ class MikuApp {
             });
         }
 
-        // 4. Speech and Audio Settings
         langSelect.value = this.stt.language;
         pitchSlider.value = this.tts.pitch;
         rateSlider.value = this.tts.rate;
@@ -1017,7 +1287,7 @@ class MikuApp {
             });
         };
         populateVoices();
-        if (speechSynthesis.onvoiceschanged !== undefined) {
+        if (typeof speechSynthesis !== 'undefined' && speechSynthesis.onvoiceschanged !== undefined) {
             speechSynthesis.onvoiceschanged = populateVoices;
         }
 
@@ -1026,48 +1296,55 @@ class MikuApp {
 
         testVoiceBtn.addEventListener('click', () => {
             this.tts.primeAudio();
+            if (ttsModeSelect) this.tts.setEngineMode(ttsModeSelect.value);
             this.tts.setPitch(pitchSlider.value);
             this.tts.setRate(rateSlider.value);
             this.tts.setVoice(voiceSelect.value);
 
-            this.executeMotion('wave');
+            this.executeMotion('explain');
             this.tts.speak(
-                "Konnichiwa! I'm Hatsune Miku! Look, I'm moving and talking through real-time code instructions! 🎵",
-                (openness) => {
-                    this.miku3D.setMouthOpenness(openness);
+                "Hey there! Look how naturally my lips, hands, and expressions move in sync with my real voice!",
+                (openness, viseme) => {
+                    this.miku3D.setMouthOpenness(openness, viseme);
                     this.visualizer.setSimulatedVolume(openness);
                 },
-                () => { this.setStatus('speaking', 'Testing Voice & 3D Motion...'); },
+                (voiceName) => { this.setStatus('speaking', `Testing Voice (${voiceName})...`); },
                 () => {
                     this.miku3D.setMouthOpenness(0);
                     this.visualizer.setSimulatedVolume(0);
                     this.setStatus('idle', 'Ready');
-                }
+                    this.miku3D.resetToIdle();
+                },
+                null,
+                'explain'
             );
         });
 
-        // 5. Save Settings
         saveBtn.addEventListener('click', () => {
             const selectedProvider = providerSelect ? providerSelect.value : 'ollama';
             this.aiProvider = selectedProvider;
             localStorage.setItem('ai_provider', selectedProvider);
             this.updateBrainToggleUI();
 
-            // Save Ollama settings
             if (ollamaHostInput) this.ollama.setHost(ollamaHostInput.value.trim());
             const chosenOllamaModel = (ollamaModelSelect.value === 'custom' && ollamaCustomInput && ollamaCustomInput.value.trim())
                 ? ollamaCustomInput.value.trim()
                 : ollamaModelSelect.value;
             this.ollama.setModel(chosenOllamaModel);
+            if (ollamaTurboCheck) this.ollama.setTurboMode(ollamaTurboCheck.checked);
+            if (ollamaThreadsSelect) this.ollama.setCpuThreads(ollamaThreadsSelect.value);
 
-            // Save Gemini settings
             const chosenGeminiModel = (modelSelect.value === 'custom' && customModelInput && customModelInput.value.trim())
                 ? customModelInput.value.trim()
                 : modelSelect.value;
             this.gemini.setApiKey(apiKeyInput.value.trim());
             this.gemini.setModel(chosenGeminiModel);
 
-            // Save Audio settings
+            if (ttsModeSelect) this.tts.setEngineMode(ttsModeSelect.value);
+            if (handsFreeCheck) {
+                this.stt.setHandsFreeMode(handsFreeCheck.checked);
+                this.updateHandsFreeUI();
+            }
             this.stt.setLanguage(langSelect.value);
             this.tts.setVoice(voiceSelect.value);
             this.tts.setPitch(pitchSlider.value);
@@ -1076,25 +1353,41 @@ class MikuApp {
             this.closeSettings();
 
             if (selectedProvider === 'ollama') {
-                this.setStatus('idle', `Ollama: ${chosenOllamaModel} (Offline)`);
-                this.showSubtitle("Miku", `Settings saved! Using local offline AI: ${chosenOllamaModel}! 🦙✨`, 'happy');
+                this.setStatus('idle', `Ollama: ${chosenOllamaModel}`);
+                this.showSubtitle("Miku", `All set! Running local AI (${chosenOllamaModel}) in low-latency mode!`, 'happy');
+                if (this.ollama.turboMode) {
+                    this.updateLatencyPill('⚡ Warming Neural Core...');
+                    this.ollama.warmUpModel().then((ok) => {
+                        if (ok) this.updateLatencyPill('⚡ Instant Warm Ready', true);
+                    });
+                }
             } else {
                 this.setStatus('idle', `Gemini: ${chosenGeminiModel}`);
-                this.showSubtitle("Miku", `Settings saved! Model is set to ${chosenGeminiModel}! ✨`, 'happy');
+                this.showSubtitle("Miku", `Settings saved! Active model: ${chosenGeminiModel}.`, 'happy');
             }
             this.executeMotion('nod');
         });
     }
 
     openSettings(highlightKey = false) {
+        this.renderMemoryBank();
         this.settingsModal.classList.add('active');
         const providerSelect = document.getElementById('cfg-ai-provider');
         const ollamaHostInput = document.getElementById('cfg-ollama-host');
         const ollamaModelSelect = document.getElementById('cfg-ollama-model');
+        const ollamaTurboCheck = document.getElementById('cfg-ollama-turbo');
+        const ollamaThreadsSelect = document.getElementById('cfg-ollama-threads');
+        const ttsModeSelect = document.getElementById('cfg-tts-mode');
+        const handsFreeCheck = document.getElementById('cfg-hands-free');
         const apiKeyInput = document.getElementById('cfg-api-key');
 
         if (providerSelect) providerSelect.value = this.aiProvider;
         if (ollamaHostInput) ollamaHostInput.value = this.ollama.host;
+        if (ollamaTurboCheck) ollamaTurboCheck.checked = this.ollama.turboMode;
+        if (ollamaThreadsSelect) ollamaThreadsSelect.value = String(this.ollama.cpuThreads);
+        if (ttsModeSelect) ttsModeSelect.value = this.tts.engineMode;
+        if (handsFreeCheck) handsFreeCheck.checked = this.stt.handsFreeMode;
+
         if (ollamaModelSelect) {
             const opts = Array.from(ollamaModelSelect.options).map(o => o.value);
             if (opts.includes(this.ollama.model)) {
