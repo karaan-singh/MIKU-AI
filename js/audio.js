@@ -1,12 +1,15 @@
 /**
- * Real-Time Web Audio Playback, Acoustic F1/F2 Formant FFT Lip-Sync Analyzer & Spectrum Visualizer
+ * Bulletproof Dual-Path Web Audio + HTMLAudioElement Playback, Loudness Boost, Speaker Routing & F1/F2 FFT Lip-Sync
  *
- * Features:
- * 1. Decodes & plays Neural MP3 / Offline SAPI WAV AudioBuffers through Web Audio API
- * 2. Extracts real 60 FPS F1 (300-880 Hz jaw openness) & F2 (1500-2900 Hz front-vowel spread) formants
- *    plus voicing murmur (110-300 Hz) to drive millisecond-accurate 3D VRM visemes ('a','i','u','e','o','m','sil')
- * 3. Detects real syllable energy onsets to trigger Kendon conversational hand/head beats automatically
- * 4. Renders 24-bar cyan-to-magenta voice frequency spectrum in real time
+ * Reliability & Audibility Guarantees:
+ * 1. Hardware Unlock Pulse (`unlockAudioHardware`): Plays a 1-frame silent buffer during user gesture so Chrome/Edge
+ *    immediately wake up the physical audio output endpoint (`ctx.state === 'running'`).
+ * 2. Vocal Presence Compressor + Boost (`DynamicsCompressorNode` + `1.5x` default Gain): Makes Miku's voice clear,
+ *    warm, and audible even on quiet laptop/USB speakers.
+ * 3. Output Speaker Sink Routing (`setOutputDevice` via `AudioContext.setSinkId` & `HTMLAudioElement.setSinkId`):
+ *    Allows routing audio directly to USB Headset / Realtek Speakers if Windows Default points to a silent monitor!
+ * 4. Guaranteed HTMLAudioElement Fallback: If WebAudio `AudioContext` is ever suspended or fails decoding,
+ *    automatically plays the MP3/WAV Blob through a native `<audio>` element while driving smooth visemes!
  */
 export class AudioVisualizer {
     constructor(canvasElement) {
@@ -14,19 +17,27 @@ export class AudioVisualizer {
         this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
         this.audioCtx = null;
         this.analyser = null;
+        this.compressor = null;
         this.gainNode = null;
         this.dataArray = null;
         this.timeArray = null;
         this.animFrameId = null;
 
+        const savedVol = (typeof localStorage !== 'undefined' && localStorage.getItem('miku_voice_volume')) || '1.5';
+        this.volumeBoost = Math.max(0.2, Math.min(2.5, parseFloat(savedVol) || 1.5));
+        this.sinkId = (typeof localStorage !== 'undefined' && localStorage.getItem('miku_audio_sink_id')) || '';
+
         this.simulatedVolume = 0;
         this.isSimulating = false;
 
         this.activeSource = null;
+        this.activeAudioEl = null;
+        this.activeBlobUrl = null;
         this.isPlayingBuffer = false;
         this.visemeTimer = null;
         this.prevRms = 0;
         this.lastBeatAt = 0;
+        this.unlockedOnce = false;
 
         this.init();
     }
@@ -44,26 +55,118 @@ export class AudioVisualizer {
         this.canvas.height = this.canvas.offsetHeight * window.devicePixelRatio || 60;
     }
 
+    setVolumeBoost(val) {
+        this.volumeBoost = Math.max(0.2, Math.min(2.5, parseFloat(val) || 1.5));
+        if (typeof localStorage !== 'undefined') localStorage.setItem('miku_voice_volume', String(this.volumeBoost));
+        if (this.gainNode && this.audioCtx) {
+            this.gainNode.gain.setValueAtTime(this.volumeBoost, this.audioCtx.currentTime);
+        }
+    }
+
+    async setOutputDevice(deviceId) {
+        this.sinkId = deviceId || '';
+        if (typeof localStorage !== 'undefined') localStorage.setItem('miku_audio_sink_id', this.sinkId);
+        if (this.audioCtx && typeof this.audioCtx.setSinkId === 'function') {
+            try {
+                await this.audioCtx.setSinkId(this.sinkId);
+            } catch (e) {
+                console.warn('[Audio] AudioContext.setSinkId unsupported/failed:', e.message);
+            }
+        }
+        if (this.activeAudioEl && typeof this.activeAudioEl.setSinkId === 'function') {
+            try {
+                await this.activeAudioEl.setSinkId(this.sinkId);
+            } catch (e) {}
+        }
+    }
+
+    async listOutputDevices() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            return devices.filter(d => d.kind === 'audiooutput');
+        } catch (e) {
+            return [];
+        }
+    }
+
     ensureAudioContext() {
         if (!this.audioCtx) {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             if (!AudioContextClass) return null;
-            this.audioCtx = new AudioContextClass();
+            this.audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
+
+            // Vocal presence compressor + adjustable loudness boost -> Analyser -> Destination
+            this.gainNode = this.audioCtx.createGain();
+            this.gainNode.gain.value = this.volumeBoost;
+
+            this.compressor = this.audioCtx.createDynamicsCompressor();
+            this.compressor.threshold.value = -18;
+            this.compressor.knee.value = 18;
+            this.compressor.ratio.value = 3.5;
+            this.compressor.attack.value = 0.003;
+            this.compressor.release.value = 0.18;
+
             this.analyser = this.audioCtx.createAnalyser();
             this.analyser.fftSize = 512;
             this.analyser.smoothingTimeConstant = 0.52;
-            this.gainNode = this.audioCtx.createGain();
-            this.gainNode.gain.value = 1.0;
-            this.gainNode.connect(this.analyser);
+
+            this.gainNode.connect(this.compressor);
+            this.compressor.connect(this.analyser);
             this.analyser.connect(this.audioCtx.destination);
 
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
             this.timeArray = new Uint8Array(this.analyser.fftSize);
+
+            if (this.sinkId && typeof this.audioCtx.setSinkId === 'function') {
+                this.audioCtx.setSinkId(this.sinkId).catch(() => {});
+            }
         }
+
         if (this.audioCtx.state === 'suspended') {
             this.audioCtx.resume().catch(() => {});
         }
+
+        // Play a 1-sample silent pulse on first user gesture so hardware audio endpoint wakes up immediately
+        if (!this.unlockedOnce && this.audioCtx) {
+            try {
+                const silent = this.audioCtx.createBuffer(1, 1, 22050);
+                const src = this.audioCtx.createBufferSource();
+                src.buffer = silent;
+                src.connect(this.audioCtx.destination);
+                src.start(0);
+                this.unlockedOnce = true;
+            } catch (e) {}
+        }
+
         return this.audioCtx;
+    }
+
+    /**
+     * Play a pleasant, clearly audible 2-note Miku cyan chime to test physical speaker output immediately!
+     */
+    async playTestChime() {
+        const ctx = this.ensureAudioContext();
+        if (!ctx) return false;
+        if (ctx.state === 'suspended') {
+            await ctx.resume();
+        }
+        const now = ctx.currentTime;
+        const notes = [587.33, 880.0]; // D5 -> A5 bright chime
+        notes.forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const g = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + idx * 0.11);
+            g.gain.setValueAtTime(0.001, now + idx * 0.11);
+            g.gain.exponentialRampToValueAtTime(0.28 * Math.min(2.0, this.volumeBoost), now + idx * 0.11 + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.11 + 0.28);
+            osc.connect(g);
+            g.connect(this.analyser);
+            osc.start(now + idx * 0.11);
+            osc.stop(now + idx * 0.11 + 0.30);
+        });
+        return ctx.state === 'running';
     }
 
     setSimulatedVolume(vol) {
@@ -71,9 +174,6 @@ export class AudioVisualizer {
         this.isSimulating = !this.isPlayingBuffer && vol > 0.01;
     }
 
-    /**
-     * Decode raw MP3/WAV ArrayBuffer into a reusable AudioBuffer
-     */
     async decodeAudio(arrayBuffer) {
         const ctx = this.ensureAudioContext();
         if (!ctx) throw new Error('Web Audio API unavailable');
@@ -82,65 +182,119 @@ export class AudioVisualizer {
     }
 
     /**
-     * Play a decoded AudioBuffer while streaming real-time F1/F2 Formant FFT visemes at ~35 Hz
+     * Play audio payload to completion (Promise resolves ONLY when utterance finishes playing!).
+     * Tries WebAudio BufferSource (with real F1/F2 FFT Lip-Sync) first; falls back automatically to `<audio>` element!
      */
-    async playDecodedBuffer(audioBuffer, { onViseme, onEnded, onError } = {}) {
-        this.stopAudioBuffer();
-        const ctx = this.ensureAudioContext();
-        if (!ctx) {
-            if (onError) onError(new Error('No AudioContext'));
-            return;
-        }
-
-        if (ctx.state === 'suspended') {
-            try {
-                await Promise.race([
-                    ctx.resume(),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('AudioContext suspended')), 350))
-                ]);
-            } catch (e) {
-                if (onError) onError(e);
-                return;
-            }
-        }
-
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.gainNode);
-
-        this.activeSource = source;
-        this.isPlayingBuffer = true;
-        this.isSimulating = false;
-        this.prevRms = 0;
-
-        this.visemeTimer = setInterval(() => {
-            if (!this.isPlayingBuffer) return;
-            const viseme = this.analyzeFormantViseme();
-            if (onViseme) {
-                onViseme(viseme.openness, viseme);
-            }
-        }, 28);
-
-        source.onended = () => {
-            if (this.activeSource !== source) return;
-            this.activeSource = null;
-            this.isPlayingBuffer = false;
-            if (this.visemeTimer) {
-                clearInterval(this.visemeTimer);
-                this.visemeTimer = null;
-            }
-            if (onViseme) {
-                onViseme(0, { vowel: 'sil', openness: 0, emphasis: 0 });
-            }
-            if (onEnded) onEnded();
-        };
-
-        try {
-            source.start(0);
-        } catch (err) {
+    playAudioPayload({ audioBuffer, blobUrl, text = '' }, { onViseme } = {}) {
+        return new Promise(async (resolve, reject) => {
             this.stopAudioBuffer();
-            if (onError) onError(err);
-        }
+            const ctx = this.ensureAudioContext();
+
+            if (ctx && ctx.state === 'suspended') {
+                try {
+                    await Promise.race([
+                        ctx.resume(),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('AudioContext suspended')), 500))
+                    ]);
+                } catch (e) {
+                    // Fall through to HTMLAudioElement path below!
+                }
+            }
+
+            // Path A: WebAudio AudioBufferSourceNode + Real 60 FPS F1/F2 Formant FFT Lip-Sync
+            if (ctx && ctx.state === 'running' && audioBuffer) {
+                try {
+                    const source = ctx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    this.gainNode.gain.setValueAtTime(this.volumeBoost, ctx.currentTime);
+                    source.connect(this.gainNode);
+
+                    this.activeSource = source;
+                    this.isPlayingBuffer = true;
+                    this.isSimulating = false;
+                    this.prevRms = 0;
+
+                    this.visemeTimer = setInterval(() => {
+                        if (!this.isPlayingBuffer) return;
+                        const viseme = this.analyzeFormantViseme();
+                        if (onViseme) onViseme(viseme.openness, viseme);
+                    }, 28);
+
+                    source.onended = () => {
+                        if (this.activeSource !== source) {
+                            resolve(false);
+                            return;
+                        }
+                        this.activeSource = null;
+                        this.isPlayingBuffer = false;
+                        if (this.visemeTimer) {
+                            clearInterval(this.visemeTimer);
+                            this.visemeTimer = null;
+                        }
+                        if (onViseme) onViseme(0, { vowel: 'sil', openness: 0, emphasis: 0 });
+                        resolve(true);
+                    };
+
+                    source.start(0);
+                    return;
+                } catch (err) {
+                    console.warn('[Audio] BufferSource failed, trying HTMLAudioElement:', err.message);
+                }
+            }
+
+            // Path B: Guaranteed Native HTMLAudioElement Fallback
+            if (blobUrl) {
+                try {
+                    const audioEl = new Audio(blobUrl);
+                    audioEl.volume = Math.min(1.0, this.volumeBoost * 0.85);
+                    if (this.sinkId && typeof audioEl.setSinkId === 'function') {
+                        try { await audioEl.setSinkId(this.sinkId); } catch (e) {}
+                    }
+                    this.activeAudioEl = audioEl;
+                    this.isPlayingBuffer = true;
+                    const startT = performance.now();
+                    const vowels = ['a', 'e', 'i', 'o', 'u'];
+
+                    this.visemeTimer = setInterval(() => {
+                        if (!this.activeAudioEl || this.activeAudioEl.paused) return;
+                        const t = (performance.now() - startT) * 0.001;
+                        const env = Math.max(0.15, 0.58 + 0.34 * Math.sin(t * 26.0));
+                        const v = vowels[Math.floor(t * 9) % vowels.length];
+                        this.simulatedVolume = env;
+                        this.isSimulating = true;
+                        if (onViseme) onViseme(env, { vowel: v, openness: env, emphasis: env * 0.8, beat: Math.sin(t * 14) > 0.92 });
+                    }, 32);
+
+                    audioEl.onended = () => {
+                        if (this.activeAudioEl === audioEl) {
+                            this.activeAudioEl = null;
+                            this.isPlayingBuffer = false;
+                            this.isSimulating = false;
+                        }
+                        if (this.visemeTimer) {
+                            clearInterval(this.visemeTimer);
+                            this.visemeTimer = null;
+                        }
+                        if (onViseme) onViseme(0, { vowel: 'sil', openness: 0, emphasis: 0 });
+                        resolve(true);
+                    };
+
+                    audioEl.onerror = (e) => {
+                        this.stopAudioBuffer();
+                        reject(new Error('HTMLAudioElement error'));
+                    };
+
+                    await audioEl.play();
+                    return;
+                } catch (elErr) {
+                    this.stopAudioBuffer();
+                    reject(elErr);
+                    return;
+                }
+            }
+
+            reject(new Error('AudioContext suspended and no blobUrl available'));
+        });
     }
 
     stopAudioBuffer() {
@@ -155,15 +309,23 @@ export class AudioVisualizer {
                 src.onended = null;
                 src.stop(0);
                 src.disconnect();
-            } catch (e) { }
+            } catch (e) {}
+        }
+        if (this.activeAudioEl) {
+            const el = this.activeAudioEl;
+            this.activeAudioEl = null;
+            try {
+                el.onended = null;
+                el.onerror = null;
+                el.pause();
+                el.src = '';
+            } catch (e) {}
         }
         this.isPlayingBuffer = false;
+        this.isSimulating = false;
         this.prevRms = 0;
     }
 
-    /**
-     * Compute average normalized energy [0..1] in a frequency band [hzLow..hzHigh]
-     */
     _bandEnergy(hzLow, hzHigh) {
         if (!this.analyser || !this.dataArray || !this.audioCtx) return 0;
         const nyquist = this.audioCtx.sampleRate * 0.5;
@@ -181,13 +343,6 @@ export class AudioVisualizer {
         return count > 0 ? (sum / (count * 255)) : 0;
     }
 
-    /**
-     * Real Acoustic Formant (F1 / F2) to VRM Viseme Classifier
-     * - F0/Murmur (110-300 Hz): Nasal / bilabial closure ('m' -> VRM 'ん')
-     * - F1 (320-880 Hz): Jaw height -> high F1 = open ('a', 'o')
-     * - Mid-Back (880-1450 Hz): Back vowel resonance ('o', 'a')
-     * - F2 (1500-2950 Hz): Tongue advancement / lip spread ('i', 'e')
-     */
     analyzeFormantViseme() {
         if (!this.analyser || !this.dataArray || !this.timeArray) {
             return { vowel: 'sil', openness: 0, emphasis: 0, beat: false };
@@ -196,7 +351,6 @@ export class AudioVisualizer {
         this.analyser.getByteFrequencyData(this.dataArray);
         this.analyser.getByteTimeDomainData(this.timeArray);
 
-        // 1. True time-domain RMS amplitude
         let sqSum = 0;
         for (let i = 0; i < this.timeArray.length; i++) {
             const centered = (this.timeArray[i] - 128) / 128;
@@ -209,17 +363,15 @@ export class AudioVisualizer {
             return { vowel: 'sil', openness: 0, emphasis: 0, beat: false };
         }
 
-        // 2. Acoustic Formant Band Energies
         const f0Murmur = this._bandEnergy(110, 300);
         const f1Jaw = this._bandEnergy(320, 880);
         const midBack = this._bandEnergy(880, 1450);
         const f2Front = this._bandEnergy(1500, 2950);
         const sibilance = this._bandEnergy(3000, 6200);
 
-        const openness = Math.min(1.0, Math.max(0.06, rms * 3.6 + f1Jaw * 0.42));
-        const emphasis = Math.min(1.0, rms * 3.8 + f2Front * 0.3);
+        const openness = Math.min(1.0, Math.max(0.06, rms * 3.2 + f1Jaw * 0.42));
+        const emphasis = Math.min(1.0, rms * 3.4 + f2Front * 0.3);
 
-        // Syllable beat onset detector (drives Kendon hand & eyebrow speech beats!)
         const now = performance.now();
         const rmsDelta = rms - this.prevRms;
         this.prevRms = rms * 0.65 + this.prevRms * 0.35;
@@ -229,25 +381,18 @@ export class AudioVisualizer {
             this.lastBeatAt = now;
         }
 
-        // 3. Classify dominant IPA/Japanese VRM vowel from formant ratios
         let vowel = 'a';
         if (f0Murmur > 0.28 && f1Jaw < 0.16 && f2Front < 0.12) {
-            // Voiced murmur with closed oral tract -> bilabial /m/, /b/, /p/, 'ん'
             vowel = 'm';
         } else if ((f2Front > f1Jaw * 0.78 && f1Jaw < 0.36) || sibilance > 0.28) {
-            // High F2 / sibilance + low F1 -> spread close vowel 'i' ('い')
             vowel = 'i';
         } else if (f1Jaw > 0.40 && midBack > 0.26 && f2Front < midBack * 0.92) {
-            // Strong F1 + mid-back resonance -> wide open 'a' ('あ')
             vowel = 'a';
         } else if (f1Jaw > 0.28 && f2Front >= midBack * 0.85) {
-            // Mid-high F1 + strong F2 -> mid-front 'e' ('え')
             vowel = 'e';
         } else if (midBack > 0.20 && f2Front < 0.22) {
-            // Rounded back resonance with suppressed F2 -> 'o' ('お')
             vowel = 'o';
         } else if (f0Murmur > 0.22 && f2Front < 0.18) {
-            // Close rounded 'u' ('う')
             vowel = 'u';
         }
 
@@ -291,7 +436,6 @@ export class AudioVisualizer {
                 const wave = Math.sin(Date.now() * 0.012 + i * 0.45);
                 val = this.simulatedVolume * (0.35 + 0.65 * Math.abs(wave));
             } else if (this.analyser && this.dataArray) {
-                // Map the 24 bars across the vocal formant range (bins 1..52 -> ~90 Hz to ~4.8 kHz)
                 const binIdx = Math.min(this.dataArray.length - 1, 1 + Math.floor(i * 2.1));
                 val = Math.max(0.05, this.dataArray[binIdx] / 255);
             }

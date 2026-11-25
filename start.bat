@@ -1,19 +1,19 @@
 @echo off
-title Hatsune Miku 3D Human AI Companion
+title Hatsune Miku // Advanced 3D AI & PC Control Server
 
 cd /d "%~dp0"
 
 echo ================================================================
-echo    HATSUNE MIKU // 3D HUMAN-LIKE AI VOICE COMPANION
+echo    HATSUNE MIKU // 3D HUMAN AI + FULL DESKTOP CONTROL ENGINE
 echo ================================================================
 echo.
 
-:: Check local Ollama status on 127.0.0.1:11434
+:: Ensure Ollama is running on 127.0.0.1:11434
 curl -s http://127.0.0.1:11434/api/tags >nul 2>&1
 if %errorlevel% equ 0 (
-    echo [AI ENGINE] Local Ollama active with miku-human:latest! (100%% Local Ready)
+    echo [AI BRAIN] Local Ollama active with miku-human:latest!
 ) else (
-    echo [AI ENGINE] Starting local Ollama service in background...
+    echo [AI BRAIN] Starting local Ollama service...
     if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" (
         start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
     ) else (
@@ -21,17 +21,8 @@ if %errorlevel% equ 0 (
     )
     timeout /t 2 /nobreak >nul
 )
-echo.
 
-:: Check if port 8080 is already listening (Unified Neural/WAV + Static VRM Server)
-netstat -ano | findstr ":8080 " >nul
-if %errorlevel% equ 0 (
-    echo [VOICE + 3D SERVER] Active server detected on http://localhost:8080
-    echo Opening http://localhost:8080/index.html ...
-    start "" "http://localhost:8080/index.html"
-    exit /b
-)
-
-echo [VOICE + 3D SERVER] Starting Neural + Offline WAV Server at http://localhost:8080 ...
-start "" "http://localhost:8080/index.html"
+:: Open browser after 2 seconds once server binds port 8080 on your live Windows desktop
+echo [PC CONTROL + VOICE SERVER] Attaching Miku to your live Windows Desktop on http://localhost:8080 ...
+start "" cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:8080/index.html"
 python server.py

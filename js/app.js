@@ -1,12 +1,12 @@
-import { GeminiClient } from './gemini.js?v=20261120h';
-import { OllamaClient } from './ollama.js?v=20261120h';
-import { TTSEngine } from './tts.js?v=20261120h';
-import { STTEngine } from './stt.js?v=20261120h';
-import { Miku3D } from './miku3d.js?v=20261120h';
-import { AvatarEngine } from './avatar.js?v=20261120h';
-import { AudioVisualizer } from './audio.js?v=20261120h';
-import { MemoryEngine } from './memory.js?v=20261120h';
-import { PerceptionEngine } from './perception.js?v=20261120h';
+import { GeminiClient } from './gemini.js?v=20261125c';
+import { OllamaClient } from './ollama.js?v=20261125c';
+import { TTSEngine } from './tts.js?v=20261125c';
+import { STTEngine } from './stt.js?v=20261125c';
+import { Miku3D } from './miku3d.js?v=20261125c';
+import { AvatarEngine } from './avatar.js?v=20261125c';
+import { AudioVisualizer } from './audio.js?v=20261125c';
+import { MemoryEngine } from './memory.js?v=20261125c';
+import { PerceptionEngine } from './perception.js?v=20261125c';
 
 function escapeHtml(str) {
     return String(str || '')
@@ -84,13 +84,22 @@ class MikuApp {
         this.closeSettingsBtn = document.getElementById('close-settings-btn');
         this.viewModeToggle = document.getElementById('view-mode-toggle');
         this.brainToggleBtn = document.getElementById('brain-toggle-btn');
+        this.pcControlBtn = document.getElementById('pc-control-btn');
         this.eyeContactBtn = document.getElementById('eye-contact-btn');
         this.handsFreeBtn = document.getElementById('hands-free-btn');
+
+        // PC Control & Saved Commands Modal Elements
+        this.pcCommandsModal = document.getElementById('pc-commands-modal');
+        this.closePcCommandsBtn = document.getElementById('close-pc-commands-btn');
+        this.btnClosePcCommands = document.getElementById('btn-close-pc-commands');
+        this.savedCommandsList = document.getElementById('saved-commands-list');
+        this.pcAppsBadge = document.getElementById('pc-apps-badge');
 
         // Written text & Voice Controls
         this.dialogueUserPrompt = document.getElementById('dialogue-user-prompt');
         this.dialogueUserText = document.getElementById('dialogue-user-text');
         this.btnReplayVoice = document.getElementById('btn-replay-voice');
+        this.btnSoundCheck = document.getElementById('btn-sound-check');
         this.btnCopyReply = document.getElementById('btn-copy-reply');
         this.btnToggleChatLog = document.getElementById('btn-toggle-chat-log');
         this.chatHistoryModal = document.getElementById('chat-history-modal');
@@ -127,7 +136,96 @@ class MikuApp {
 
     isModalOpen() {
         return (this.settingsModal && this.settingsModal.classList.contains('active')) ||
-            (this.chatHistoryModal && this.chatHistoryModal.classList.contains('active'));
+            (this.chatHistoryModal && this.chatHistoryModal.classList.contains('active')) ||
+            (this.pcCommandsModal && this.pcCommandsModal.classList.contains('active'));
+    }
+
+    getServerBase() {
+        return this.tts.serverAvailable ? (this.tts.serverBaseUrl || '') : 'http://127.0.0.1:8080';
+    }
+
+    async callPcApi(path, method = 'GET', bodyObj = null) {
+        try {
+            const base = this.getServerBase();
+            const opts = { method, headers: {} };
+            if (bodyObj) {
+                opts.headers['Content-Type'] = 'application/json';
+                opts.body = JSON.stringify(bodyObj);
+            }
+            const res = await fetch(`${base}${path}`, opts);
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async renderSavedCommands() {
+        if (!this.savedCommandsList) return;
+        const data = await this.callPcApi('/api/pc/saved', 'GET');
+        if (!data || !data.ok) {
+            this.savedCommandsList.innerHTML = '<span style="color: var(--text-muted); font-size: 12px;">Desktop server offline—run start.bat or python server.py to enable PC controls.</span>';
+            return;
+        }
+        if (this.pcAppsBadge) {
+            this.pcAppsBadge.textContent = `✅ ${data.installedAppsCount} PC Apps Indexed`;
+        }
+        const sandboxBanner = document.getElementById('desktop-sandbox-banner');
+        if (sandboxBanner) {
+            sandboxBanner.style.display = data.interactiveDesktop === false ? 'block' : 'none';
+        }
+        const items = data.savedCommands || [];
+        if (!items.length) {
+            this.savedCommandsList.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 10px 4px;">No saved commands yet—ask Miku to open YouTube, search the browser, or launch an app, and she will auto-save it here!</div>';
+            return;
+        }
+
+        this.savedCommandsList.innerHTML = '';
+        items.forEach((cmd) => {
+            const row = document.createElement('div');
+            row.className = 'saved-cmd-item';
+            row.innerHTML = `
+                <div class="saved-cmd-meta">
+                    <span class="saved-cmd-phrase">"${escapeHtml(cmd.phrase)}"</span>
+                    <span class="saved-cmd-detail">${escapeHtml(cmd.tool)} → ${escapeHtml(cmd.target)} • ⚡ ${cmd.hits || 1}x</span>
+                </div>
+                <button class="dialogue-action-btn btn-run-saved" style="flex-shrink: 0;">▶ Run</button>
+            `;
+            row.querySelector('.btn-run-saved').addEventListener('click', async () => {
+                this.tts.primeAudio();
+                this.closePcCommands();
+                const execRes = await this.callPcApi('/api/pc/execute', 'POST', {
+                    tool: cmd.tool,
+                    target: cmd.target,
+                    steps: cmd.steps || null,
+                    phrase: cmd.phrase,
+                    reply: cmd.reply,
+                    execute: true,
+                    save: true
+                });
+                if (execRes) {
+                    const spoken = (cmd.tool === 'pc_status' || cmd.tool === 'screenshot')
+                        ? (execRes.reply || cmd.reply)
+                        : (cmd.reply || execRes.reply);
+                    this.updateLatencyPill(`⚡ ${execRes.latencyMs || 2}ms Saved Command`, true);
+                    this.handleMikuResponse({
+                        action: execRes.action || 'nod',
+                        rawText: spoken,
+                        speechText: spoken
+                    });
+                }
+            });
+            this.savedCommandsList.appendChild(row);
+        });
+    }
+
+    openPcCommands() {
+        this.renderSavedCommands();
+        if (this.pcCommandsModal) this.pcCommandsModal.classList.add('active');
+    }
+
+    closePcCommands() {
+        if (this.pcCommandsModal) this.pcCommandsModal.classList.remove('active');
     }
 
     updateLatencyPill(text, highlight = false) {
@@ -158,15 +256,14 @@ class MikuApp {
         this.addChatTurn('miku', greeting, 'wave', greeting);
         this.executeMotion('wave');
 
-        // Prime audio context on first user gesture
+        // Prime hardware audio output on any pointer, touch, click, or key gesture
         const unlockAudio = () => {
             this.tts.primeAudio();
             this.visualizer.ensureAudioContext();
-            window.removeEventListener('click', unlockAudio);
-            window.removeEventListener('keydown', unlockAudio);
         };
-        window.addEventListener('click', unlockAudio);
-        window.addEventListener('keydown', unlockAudio);
+        ['pointerdown', 'mousedown', 'touchstart', 'click', 'keydown'].forEach((evt) => {
+            window.addEventListener(evt, unlockAudio, { once: true, passive: true });
+        });
 
         const touchActivity = () => { this.lastUserActivityAt = Date.now(); };
         window.addEventListener('mousemove', touchActivity, { passive: true });
@@ -414,6 +511,44 @@ class MikuApp {
             }, 4000);
         });
 
+        // Desktop Control & Saved Fast Commands Header Button
+        if (this.pcControlBtn) {
+            this.pcControlBtn.addEventListener('click', () => this.openPcCommands());
+        }
+        if (this.closePcCommandsBtn) {
+            this.closePcCommandsBtn.addEventListener('click', () => this.closePcCommands());
+        }
+        if (this.btnClosePcCommands) {
+            this.btnClosePcCommands.addEventListener('click', () => this.closePcCommands());
+        }
+        if (this.pcCommandsModal) {
+            this.pcCommandsModal.addEventListener('click', (e) => {
+                if (e.target === this.pcCommandsModal) this.closePcCommands();
+            });
+            this.pcCommandsModal.querySelectorAll('.pc-quick-btn').forEach((btn) => {
+                btn.addEventListener('click', async () => {
+                    this.tts.primeAudio();
+                    const tool = btn.dataset.tool;
+                    const target = btn.dataset.target;
+                    this.closePcCommands();
+                    const res = await this.callPcApi('/api/pc/execute', 'POST', {
+                        tool,
+                        target,
+                        execute: true,
+                        save: false
+                    });
+                    if (res && res.reply) {
+                        this.updateLatencyPill(`⚡ ${res.latencyMs || 3}ms PC Action`, true);
+                        this.handleMikuResponse({
+                            action: res.action || 'nod',
+                            rawText: res.reply,
+                            speechText: res.reply
+                        });
+                    }
+                });
+            });
+        }
+
         // Webcam Eye-Contact Header Toggle
         if (this.eyeContactBtn) {
             this.eyeContactBtn.addEventListener('click', async () => {
@@ -514,6 +649,18 @@ class MikuApp {
                 } else {
                     const text = this.subtitleText.textContent.trim();
                     if (text) this.speakMikuResponse(text, 'explain');
+                }
+            });
+        }
+
+        if (this.btnSoundCheck) {
+            this.btnSoundCheck.addEventListener('click', async () => {
+                this.tts.primeAudio();
+                const ok = await this.visualizer.playTestChime();
+                if (ok) {
+                    this.speakMikuResponse("Audio check! Can you hear my voice clearly now?", 'wave');
+                } else {
+                    this.setStatus('idle', 'Audio blocked—check browser mute or speaker output in Settings');
                 }
             });
         }
@@ -729,6 +876,32 @@ class MikuApp {
         // 2. Record user turn in transcript
         this.addChatTurn('user', text);
 
+        // 2.5 INSTANT PC CONTROL & SAVED COMMAND ENGINE (<15ms execution + auto-save—zero LLM wait!)
+        const fastPcHit = await this.callPcApi('/api/pc/resolve', 'POST', {
+            text,
+            only_saved: false,
+            execute: true
+        });
+        if (fastPcHit && fastPcHit.matched) {
+            const dynamicTools = new Set(['pc_status', 'screenshot', 'web_search', 'window_control']);
+            const replyText = (dynamicTools.has(fastPcHit.tool) && fastPcHit.result?.reply)
+                ? fastPcHit.result.reply
+                : (fastPcHit.reply || fastPcHit.result?.reply || 'Done!');
+            const act = fastPcHit.result?.action || 'nod';
+            this.ollama.history.push({ role: 'user', content: text });
+            this.ollama.history.push({ role: 'assistant', content: replyText });
+            const badgeLabel = fastPcHit.source === 'saved_cache'
+                ? `⚡ ${fastPcHit.latencyMs}ms Saved Command (${fastPcHit.hits}x)`
+                : `⚡ ${fastPcHit.latencyMs}ms Live PC Control (Saved!)`;
+            this.updateLatencyPill(badgeLabel, true);
+            this.handleMikuResponse({
+                action: act,
+                rawText: replyText,
+                speechText: replyText
+            });
+            return;
+        }
+
         const isOllama = this.aiProvider === 'ollama';
         const providerName = isOllama
             ? `Local Ollama (${this.ollama.model})`
@@ -770,6 +943,8 @@ class MikuApp {
             if (isOllama) {
                 const useStreamingVoice = this.ollama.turboMode;
                 let clausesEnqueued = 0;
+                let streamedCommand = null;
+                let streamedExecPromise = null;
 
                 if (useStreamingVoice) {
                     this.tts.beginStreamSession({
@@ -821,14 +996,66 @@ class MikuApp {
                     useStreamingVoice ? (clause) => {
                         clausesEnqueued++;
                         this.tts.enqueueClause(clause.speechText, clause.action);
-                    } : null
+                    } : null,
+                    (cmd) => {
+                        // Ollama emitted <<CMD:tool|target>> -> execute PC/Browser action immediately mid-stream!
+                        streamedCommand = cmd;
+                        streamedExecPromise = this.callPcApi('/api/pc/execute', 'POST', {
+                            tool: cmd.tool,
+                            target: cmd.target,
+                            execute: true,
+                            save: false
+                        });
+                    }
                 );
 
                 clearTimeout(thinkingTimeout);
                 this.miku3D.setInferenceThrottle(false);
                 if (!result) return;
 
-                if (result.metrics) {
+                // Finalize Conversational Ollama PC Command(s) & Save to Instant Cache!
+                const allCmds = (result.commands && result.commands.length > 0)
+                    ? result.commands
+                    : (streamedCommand ? [streamedCommand] : []);
+                if (allCmds.length > 0) {
+                    const firstCmd = allCmds[0];
+                    let execRes = null;
+                    if (allCmds.length === 1 && streamedExecPromise) {
+                        execRes = await streamedExecPromise;
+                    } else {
+                        const remainingSteps = streamedExecPromise ? allCmds.slice(1) : allCmds;
+                        if (streamedExecPromise) await streamedExecPromise;
+                        if (remainingSteps.length > 0) {
+                            execRes = await this.callPcApi('/api/pc/execute', 'POST', {
+                                tool: remainingSteps[0].tool,
+                                target: remainingSteps[0].target,
+                                steps: remainingSteps,
+                                execute: true,
+                                save: false
+                            });
+                        }
+                    }
+                    if (execRes && (firstCmd.tool === 'pc_status' || firstCmd.tool === 'screenshot') && execRes.reply) {
+                        result.rawText = execRes.reply;
+                        result.speechText = execRes.reply;
+                        if (useStreamingVoice) {
+                            this.tts.enqueueClause(execRes.reply, execRes.action || 'explain');
+                            clausesEnqueued++;
+                        }
+                    }
+                    await this.callPcApi('/api/pc/execute', 'POST', {
+                        tool: firstCmd.tool,
+                        target: firstCmd.target,
+                        steps: allCmds,
+                        phrase: text,
+                        reply: result.rawText,
+                        execute: false,
+                        save: true
+                    });
+                    if (result.metrics) {
+                        this.updateLatencyPill(`⚡ Ollama PC Action Saved • ${(result.metrics.ttftMs / 1000).toFixed(2)}s TTFT`, true);
+                    }
+                } else if (result.metrics) {
                     this.updateLatencyPill(`⚡ ${(result.metrics.ttftMs / 1000).toFixed(2)}s TTFT • ${result.metrics.tokensPerSec} tok/s`, true);
                 }
 
@@ -969,6 +1196,10 @@ class MikuApp {
         const diagPanel = document.getElementById('diagnostics-panel');
 
         const ttsModeSelect = document.getElementById('cfg-tts-mode');
+        const audioSinkSelect = document.getElementById('cfg-audio-sink');
+        const btnRefreshSinks = document.getElementById('btn-refresh-sinks');
+        const volSlider = document.getElementById('cfg-tts-volume');
+        const volVal = document.getElementById('cfg-vol-val');
         const handsFreeCheck = document.getElementById('cfg-hands-free');
         const langSelect = document.getElementById('cfg-stt-lang');
         const voiceSelect = document.getElementById('cfg-tts-voice');
@@ -996,6 +1227,10 @@ class MikuApp {
         if (ollamaTurboCheck) ollamaTurboCheck.checked = this.ollama.turboMode;
         if (ollamaThreadsSelect) ollamaThreadsSelect.value = String(this.ollama.cpuThreads);
         if (ttsModeSelect) ttsModeSelect.value = this.tts.engineMode;
+        if (volSlider && volVal) {
+            volSlider.value = this.visualizer.volumeBoost;
+            volVal.textContent = `${Math.round(this.visualizer.volumeBoost * 100)}%`;
+        }
         if (handsFreeCheck) handsFreeCheck.checked = this.stt.handsFreeMode;
 
         if (btnClearMemory) {
@@ -1274,6 +1509,46 @@ class MikuApp {
         rateSlider.value = this.tts.rate;
         pitchVal.textContent = this.tts.pitch;
         rateVal.textContent = this.tts.rate;
+        if (volSlider && volVal) {
+            volSlider.value = this.visualizer.volumeBoost;
+            volVal.textContent = `${Math.round(this.visualizer.volumeBoost * 100)}%`;
+            volSlider.addEventListener('input', () => {
+                volVal.textContent = `${Math.round(parseFloat(volSlider.value) * 100)}%`;
+                this.visualizer.setVolumeBoost(volSlider.value);
+            });
+        }
+
+        const populateAudioSinks = async (requestLabels = false) => {
+            if (!audioSinkSelect) return;
+            try {
+                if (requestLabels && navigator.mediaDevices?.getUserMedia) {
+                    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    tmp.getTracks().forEach(t => t.stop());
+                }
+            } catch (e) {}
+            const sinks = await this.visualizer.listOutputDevices();
+            audioSinkSelect.innerHTML = '<option value="">System Default Speaker / Headphones</option>';
+            sinks.forEach((d, idx) => {
+                if (d.deviceId === 'default') return;
+                const opt = document.createElement('option');
+                opt.value = d.deviceId;
+                opt.textContent = d.label || `Speaker Output #${idx + 1}`;
+                if (d.deviceId === this.visualizer.sinkId) opt.selected = true;
+                audioSinkSelect.appendChild(opt);
+            });
+        };
+        this._populateAudioSinks = populateAudioSinks;
+        populateAudioSinks(false);
+
+        if (btnRefreshSinks) {
+            btnRefreshSinks.addEventListener('click', () => populateAudioSinks(true));
+        }
+        if (audioSinkSelect) {
+            audioSinkSelect.addEventListener('change', async () => {
+                await this.visualizer.setOutputDevice(audioSinkSelect.value);
+                await this.visualizer.playTestChime();
+            });
+        }
 
         const populateVoices = () => {
             const voices = this.tts.getVoices();
@@ -1294,12 +1569,15 @@ class MikuApp {
         pitchSlider.addEventListener('input', () => { pitchVal.textContent = pitchSlider.value; });
         rateSlider.addEventListener('input', () => { rateVal.textContent = rateSlider.value; });
 
-        testVoiceBtn.addEventListener('click', () => {
+        testVoiceBtn.addEventListener('click', async () => {
             this.tts.primeAudio();
             if (ttsModeSelect) this.tts.setEngineMode(ttsModeSelect.value);
+            if (volSlider) this.visualizer.setVolumeBoost(volSlider.value);
+            if (audioSinkSelect) await this.visualizer.setOutputDevice(audioSinkSelect.value);
             this.tts.setPitch(pitchSlider.value);
             this.tts.setRate(rateSlider.value);
             this.tts.setVoice(voiceSelect.value);
+            await this.visualizer.playTestChime();
 
             this.executeMotion('explain');
             this.tts.speak(
@@ -1341,6 +1619,8 @@ class MikuApp {
             this.gemini.setModel(chosenGeminiModel);
 
             if (ttsModeSelect) this.tts.setEngineMode(ttsModeSelect.value);
+            if (volSlider) this.visualizer.setVolumeBoost(volSlider.value);
+            if (audioSinkSelect) this.visualizer.setOutputDevice(audioSinkSelect.value);
             if (handsFreeCheck) {
                 this.stt.setHandsFreeMode(handsFreeCheck.checked);
                 this.updateHandsFreeUI();
@@ -1371,6 +1651,7 @@ class MikuApp {
 
     openSettings(highlightKey = false) {
         this.renderMemoryBank();
+        if (this._populateAudioSinks) this._populateAudioSinks(false);
         this.settingsModal.classList.add('active');
         const providerSelect = document.getElementById('cfg-ai-provider');
         const ollamaHostInput = document.getElementById('cfg-ollama-host');
@@ -1378,6 +1659,10 @@ class MikuApp {
         const ollamaTurboCheck = document.getElementById('cfg-ollama-turbo');
         const ollamaThreadsSelect = document.getElementById('cfg-ollama-threads');
         const ttsModeSelect = document.getElementById('cfg-tts-mode');
+        const audioSinkSelect = document.getElementById('cfg-audio-sink');
+        const btnRefreshSinks = document.getElementById('btn-refresh-sinks');
+        const volSlider = document.getElementById('cfg-tts-volume');
+        const volVal = document.getElementById('cfg-vol-val');
         const handsFreeCheck = document.getElementById('cfg-hands-free');
         const apiKeyInput = document.getElementById('cfg-api-key');
 
@@ -1386,6 +1671,10 @@ class MikuApp {
         if (ollamaTurboCheck) ollamaTurboCheck.checked = this.ollama.turboMode;
         if (ollamaThreadsSelect) ollamaThreadsSelect.value = String(this.ollama.cpuThreads);
         if (ttsModeSelect) ttsModeSelect.value = this.tts.engineMode;
+        if (volSlider && volVal) {
+            volSlider.value = this.visualizer.volumeBoost;
+            volVal.textContent = `${Math.round(this.visualizer.volumeBoost * 100)}%`;
+        }
         if (handsFreeCheck) handsFreeCheck.checked = this.stt.handsFreeMode;
 
         if (ollamaModelSelect) {

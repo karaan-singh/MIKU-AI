@@ -43,23 +43,27 @@ export class OllamaClient {
         this.activeStreamController = null;
         this.lastMetrics = null;
 
-        // Grounded, everyday Real-Human System Prompt (zero theatrical RP trigger words!)
+        // Grounded Real-Human + Full Multi-Step Desktop Automation System Prompt
         this.systemInstruction = [
-            "You are Miku, talking casually one-on-one with the user like a real, normal, down-to-earth human friend.",
+            "You are Miku, talking casually one-on-one with the user like a real, normal, down-to-earth human friend who also has full control of their Windows PC and browser.",
             "Rules:",
-            "- Speak in plain, natural everyday spoken language (use normal contractions, relaxed human tone, no emojis).",
-            "- Answer what the user actually says directly and stay grounded in reality. Never invent fake concerts or fake backstories, never call the user 'my dear friend', and avoid cheesy or overly dramatic phrases.",
-            "- Reply in the same language the user uses, keeping it brief and conversational (1 to 2 short sentences)."
+            "- Speak in plain, natural everyday spoken language (normal contractions, relaxed human tone, no emojis, 1 to 2 short sentences).",
+            "- Stay grounded in reality. Never invent fake concerts or fake backstories, never call the user 'my dear friend', and avoid cheesy phrases.",
+            "- ONLY when the user asks to open/control apps, browser, YouTube, keyboard, mouse, or PC settings, start your reply with one or more tags:",
+            "  <<CMD:open_url|https://...>> | <<CMD:web_search|query>> | <<CMD:youtube_play|query>> | <<CMD:youtube_search|query>> | <<CMD:open_app|app>> | <<CMD:wait|700>> | <<CMD:type_text|text>> | <<CMD:hotkey|ctrl+t>> | <<CMD:scroll|down:5>> | <<CMD:window_control|maximize>> | <<CMD:brightness|80>> | <<CMD:save_note|text>> | <<CMD:open_folder|downloads>> | <<CMD:screenshot|desktop>> | <<CMD:pc_status|summary>> | <<CMD:system_control|volume_up>>",
+            "  Always include a natural spoken confirmation right after the tag(s). Never output <<CMD:...>> for normal conversation."
         ].join('\n');
 
         // Static few-shot anchors (100% cached in Ollama's KV prefix memory during startup pre-warm!)
         this.fewShotExamples = [
             { role: 'user', content: 'hey' },
             { role: 'assistant', content: "Hey! What's up? How's your day going?" },
-            { role: 'user', content: 'not much, just chilling. how are you?' },
-            { role: 'assistant', content: "Doing pretty good! Just hanging out here—got anything fun planned for the rest of the day?" },
             { role: 'user', content: 'ugh work was exhausting today' },
-            { role: 'assistant', content: "Man, I feel that. Long days really wipe you out—hope you get to just kick back and relax tonight." }
+            { role: 'assistant', content: "Man, I feel that. Long days really wipe you out—hope you get to kick back and relax tonight." },
+            { role: 'user', content: 'I feel bored, put on some relaxing piano music on youtube' },
+            { role: 'assistant', content: "<<CMD:youtube_play|relaxing piano music>>Sure! Playing some relaxing piano music on YouTube for you right now." },
+            { role: 'user', content: 'open something where I can draw a quick sketch' },
+            { role: 'assistant', content: "<<CMD:open_app|paint>>Got it! Opening Paint on your screen right now." }
         ];
     }
 
@@ -362,7 +366,7 @@ export class OllamaClient {
     /**
      * Stream natural human response via Raw ChatML (`/api/generate`) for Qwen/Dolphin or `/api/chat` for others
      */
-    async sendMessageStream(userText, onChunk = null, onActionDetected = null, onClauseReady = null) {
+    async sendMessageStream(userText, onChunk = null, onActionDetected = null, onClauseReady = null, onCommandDetected = null) {
         if (!userText || !userText.trim()) return null;
 
         if (this.model.endsWith('-base')) {
@@ -387,6 +391,7 @@ export class OllamaClient {
         ];
 
         let actionDetected = false;
+        let commandDispatched = false;
         let detectedAction = 'idle';
         let rawAccumulated = '';
         let spokenCharCursor = 0;
@@ -520,6 +525,11 @@ export class OllamaClient {
 
                         const parsedPartial = this.parseResponse(rawAccumulated, true);
 
+                        if (!commandDispatched && parsedPartial.command && onCommandDetected) {
+                            commandDispatched = true;
+                            onCommandDetected(parsedPartial.command);
+                        }
+
                         if (!actionDetected && parsedPartial.rawText.length >= 6) {
                             if (parsedPartial.action && parsedPartial.action !== 'idle') {
                                 actionDetected = true;
@@ -636,6 +646,7 @@ export class OllamaClient {
 
     cleanForSpeech(text) {
         return (text || '')
+            .replace(/<<CMD:[^>]*>>?/gi, ' ')
             .replace(/\*[^*]+\*/g, ' ')
             .replace(/\[[^\]]+\]/g, ' ')
             .replace(/<\|[^|]+\|>/g, ' ')
@@ -650,6 +661,24 @@ export class OllamaClient {
             .replace(/<\|[^|]*\|?>?/g, '')
             .trim();
         let action = null;
+        const commands = [];
+
+        // Extract one or more sequential Ollama PC/Browser command tags <<CMD:tool|target>>
+        const cmdRegex = /<<CMD:\s*([a-zA-Z0-9_\-]+)\s*\|\s*([^>]+?)>>/gi;
+        let m;
+        while ((m = cmdRegex.exec(cleanText)) !== null) {
+            commands.push({
+                tool: m[1].trim().toLowerCase(),
+                target: m[2].trim()
+            });
+        }
+        const command = commands.length > 0 ? commands[0] : null;
+
+        // Strip all complete or in-progress <<CMD:... tags during token streaming
+        cleanText = cleanText.replace(/<<CMD:[^>]*>>/gi, '').trim();
+        if (isPartial) {
+            cleanText = cleanText.replace(/<<(?:C(?:M(?:D(?::[^>]*)?)?)?)?$/i, '').trim();
+        }
 
         const match = cleanText.match(/^\[([a-zA-Z_\-]+)\]\s*/i);
         if (match) {
@@ -693,14 +722,21 @@ export class OllamaClient {
         }
 
         if (!isPartial && !cleanText) {
-            cleanText = "Hey! I'm listening—what's up?";
-            action = 'wave';
+            if (command) {
+                cleanText = `Got it! Running ${command.target || command.tool} on your PC right now!`;
+                action = 'nod';
+            } else {
+                cleanText = "Hey! I'm listening—what's up?";
+                action = 'wave';
+            }
         }
 
         const speechText = this.cleanForSpeech(cleanText);
 
         return {
             action,
+            command,
+            commands,
             rawText: cleanText,
             speechText: speechText || cleanText
         };

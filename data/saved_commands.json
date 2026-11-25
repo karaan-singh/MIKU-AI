@@ -1,0 +1,47 @@
+{
+  "check my pc status and ram usage": {
+    "key": "check my pc status and ram usage",
+    "phrase": "check my pc status and ram usage",
+    "tool": "pc_status",
+    "target": "summary",
+    "reply": "Checking your live CPU, RAM, and disk usage right now!",
+    "hits": 2,
+    "updatedAt": 1795580602
+  },
+  "open notepad": {
+    "key": "open notepad",
+    "phrase": "open notepad",
+    "tool": "open_app",
+    "target": "notepad",
+    "reply": "Opening Notepad right in front of your screen!",
+    "hits": 2,
+    "updatedAt": 1795581395
+  },
+  "open youtube": {
+    "key": "open youtube",
+    "phrase": "open youtube",
+    "tool": "open_url",
+    "target": "https://www.youtube.com",
+    "reply": "Opening YouTube in your browser right now!",
+    "hits": 1,
+    "updatedAt": 1795580874
+  },
+  "open calculator": {
+    "key": "open calculator",
+    "phrase": "open calculator",
+    "tool": "open_app",
+    "target": "calculator",
+    "reply": "Launching Calculator for you!",
+    "hits": 1,
+    "updatedAt": 1795580905
+  },
+  "open youtube and search pokemon": {
+    "key": "open youtube and search pokemon",
+    "phrase": "open youtube and search pokemon",
+    "tool": "youtube_search",
+    "target": "pokemon",
+    "reply": "Alright, searching for Pokémon videos on YouTube. Should have some fun ones for you.",
+    "hits": 1,
+    "updatedAt": 1795581376
+  }
+}

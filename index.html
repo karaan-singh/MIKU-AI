@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Miku AI // Real-Time 3D Human-Like Voice Companion</title>
-    <link rel="stylesheet" href="css/style.css?v=20261120j">
+    <link rel="stylesheet" href="css/style.css?v=20261125c">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
 </head>
 <body>
@@ -16,6 +16,7 @@
             <h1 class="brand-title">HATSUNE MIKU // 3D AI COMPANION</h1>
         </div>
         <div class="top-actions">
+            <button id="pc-control-btn" class="mode-toggle-btn pill-toggle" title="Desktop Control, Browser/YouTube Actions & Saved Fast Commands">⚡ PC Control</button>
             <button id="eye-contact-btn" class="mode-toggle-btn pill-toggle" title="Toggle Local Webcam Eye-Contact Tracking (100% Private In-Browser)">👁️ Eye Contact</button>
             <button id="hands-free-btn" class="mode-toggle-btn pill-toggle" title="Toggle Hands-Free Continuous Voice Conversation">🎙️ Hands-Free</button>
             <button id="brain-toggle-btn" class="mode-toggle-btn" title="Click to switch AI Brain" style="border-color: var(--miku-cyan); color: var(--miku-cyan);">🦙 Ollama (Offline)</button>
@@ -51,6 +52,7 @@
                 <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                     <span id="speaker-name" class="speaker-label miku">MIKU</span>
                     <button id="btn-replay-voice" class="dialogue-action-btn" title="Replay Miku's Voice with Real Formant FFT Lip-Sync">🔊 Replay Voice</button>
+                    <button id="btn-sound-check" class="dialogue-action-btn" title="Play instant chime & test Miku's voice output">🔔 Sound Check</button>
                     <button id="btn-copy-reply" class="dialogue-action-btn" title="Copy written reply to clipboard">📋 Copy</button>
                     <span id="latency-telemetry" class="latency-pill" style="display: none;" title="Live Neural Inference & Voice Latency">⚡ Warming...</span>
                 </div>
@@ -103,7 +105,7 @@
         <div class="input-row">
             <button id="mic-btn" class="mic-btn" title="Click to speak (or hold Spacebar)">🎙️</button>
             <div class="text-input-wrapper">
-                <input type="text" id="user-text-input" class="text-input" placeholder="Speak or type to Miku naturally... (Hold Space to talk)" autocomplete="off">
+                <input type="text" id="user-text-input" class="text-input" placeholder="Chat naturally or command Miku: 'open YouTube and search lo-fi', 'open calculator', 'PC status'..." autocomplete="off">
             </div>
             <button id="send-btn" class="send-btn" title="Send message">➔</button>
         </div>
@@ -207,6 +209,19 @@
                         </select>
                     </div>
                     <div class="form-group">
+                        <label for="cfg-audio-sink">🔊 Output Speaker / Headphone Device</label>
+                        <div style="display: flex; gap: 8px;">
+                            <select id="cfg-audio-sink" class="form-select" style="flex: 1;">
+                                <option value="">System Default Audio Output</option>
+                            </select>
+                            <button type="button" id="btn-refresh-sinks" class="btn-secondary" title="Detect all connected speakers & headphones" style="white-space: nowrap; font-size: 11px;">🔄 Detect Speakers</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Voice Volume Boost: <span id="cfg-vol-val">150%</span></label>
+                        <input type="range" id="cfg-tts-volume" class="form-range" min="0.5" max="2.5" step="0.1" value="1.5">
+                    </div>
+                    <div class="form-group">
                         <label class="checkbox-row">
                             <input type="checkbox" id="cfg-hands-free">
                             <span>🎙️ Hands-Free Continuous Conversation (Auto-listen after Miku replies)</span>
@@ -275,6 +290,54 @@
         </div>
     </div>
 
+    <!-- Desktop Control & Saved Fast Commands Modal -->
+    <div id="pc-commands-modal" class="modal-overlay">
+        <div class="modal-card chat-history-card">
+            <div class="modal-header">
+                <h2 class="modal-title">⚡ Desktop Control & Saved Fast Commands</h2>
+                <button id="close-pc-commands-btn" class="close-btn">✕</button>
+            </div>
+            <div class="modal-body" style="gap: 16px;">
+                <div id="desktop-sandbox-banner" style="display: none; background: rgba(255, 170, 68, 0.14); border: 1px solid #ffaa44; color: #ffdd99; padding: 10px 12px; border-radius: 10px; font-size: 12px; line-height: 1.45;">
+                    ⚠️ <strong>Background Session Detected:</strong> Double-click <code>start.bat</code> in your project folder (or run <code>python server.py</code> in your own terminal) so opened apps &amp; browser windows appear visibly on your live Windows screen!
+                </div>
+                <div class="setting-section">
+                    <div class="section-label" style="justify-content: space-between;">
+                        <span>🖥️ Full Desktop, Browser, Keyboard &amp; Window Controls</span>
+                        <span id="pc-apps-badge" class="latency-pill">Indexing PC apps...</span>
+                    </div>
+                    <div class="pc-quick-grid">
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="open_url" data-target="https://www.google.com">🌐 Open Browser</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="youtube_play" data-target="lofi hip hop radio">🎵 Play Lofi YT</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="open_app" data-target="calculator">🧮 Calculator</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="open_app" data-target="notepad">📝 Notepad</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="open_app" data-target="vs code">💻 VS Code</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="open_folder" data-target="downloads">📁 Downloads</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="window_control" data-target="list">🪟 List Windows</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="window_control" data-target="maximize">🗖 Maximize</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="scroll" data-target="down:6">🔽 Scroll Down</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="screenshot" data-target="desktop">📸 Screenshot</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="system_control" data-target="volume_up">🔊 PC Vol +</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="system_control" data-target="volume_down">🔉 PC Vol -</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="system_control" data-target="media_play_pause">⏯️ Play / Pause</button>
+                        <button class="dialogue-action-btn pc-quick-btn" data-tool="pc_status" data-target="summary">📊 CPU / RAM / Disk</button>
+                    </div>
+                </div>
+
+                <div class="setting-section">
+                    <div class="section-label">⚡ Learned Instant Commands (Auto-Saved for &lt;5ms Next Run)</div>
+                    <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4;">
+                        Whenever you ask Miku to open an app, search YouTube/Google, or control your PC through Ollama, she automatically saves that command here so the next time you say it, it executes in <strong>under 5ms</strong>!
+                    </p>
+                    <div id="saved-commands-list" class="saved-commands-list"></div>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end;">
+                <button id="btn-close-pc-commands" class="btn-primary" style="font-size: 12px;">Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Three.js 3D Library (Local & Offline) -->
     <script src="js/three.min.js"></script>
     <script src="js/GLTFLoader.js"></script>
@@ -284,6 +347,6 @@
     <script src="js/gsap.min.js"></script>
 
     <!-- Main Application Module -->
-    <script type="module" src="js/app.js?v=20261120h"></script>
+    <script type="module" src="js/app.js?v=20261125c"></script>
 </body>
 </html>
